@@ -87,6 +87,8 @@ export default function App() {
   const [entryMode, setEntryMode] = useState<EntryMode | null>(null);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [mobileFirstTime, setMobileFirstTime] = useState(() => !localStorage.getItem('wb.mobile.setup'));
+  const [swipeCount, setSwipeCount] = useState(0);
+  const swipeRef = useRef({ lastX: 0, lastY: 0, direction: null as 'left' | 'right' | null, count: 0, timestamp: 0 });
 
   // Up to DEVICE_COUNT independent phone controllers, each its own room (Device
   // ID + Code) and its own routable source dev1..dev5. Live motion per device is
@@ -287,6 +289,18 @@ export default function App() {
   const chooseFeather = (id: string) => {
     setFeatherState(id);
     engine.setFeather(id); // share through the engine so the whole brain knows
+  };
+
+  const nextFeather = () => {
+    const currentIndex = FEATHERS.findIndex((f) => f.id === feather);
+    const nextIndex = (currentIndex + 1) % FEATHERS.length;
+    chooseFeather(FEATHERS[nextIndex].id);
+  };
+
+  const prevFeather = () => {
+    const currentIndex = FEATHERS.findIndex((f) => f.id === feather);
+    const prevIndex = (currentIndex - 1 + FEATHERS.length) % FEATHERS.length;
+    chooseFeather(FEATHERS[prevIndex].id);
   };
 
   const snapshot = useEngineSnapshot(engine);
@@ -504,6 +518,61 @@ export default function App() {
   useEffect(() => {
     engine.setScene(sceneForFeather(feather));
   }, [engine, feather]);
+
+  // Gesture detection: swipe left/right to change feathers in fullscreen.
+  useEffect(() => {
+    if (!fullscreenProjection) return;
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const touch = e.touches[0];
+      const s = swipeRef.current;
+
+      // Detect significant horizontal movement (swipe)
+      const deltaX = touch.clientX - s.lastX;
+      const now = Date.now();
+
+      if (Math.abs(deltaX) > 80) {
+        // Significant swipe detected
+        const newDirection = deltaX > 0 ? 'right' : 'left';
+
+        // Reset if direction changed or too much time passed
+        if (s.direction !== newDirection || now - s.timestamp > 800) {
+          s.direction = newDirection;
+          s.count = 1;
+          s.timestamp = now;
+          setSwipeCount(1);
+        } else if (s.count === 1) {
+          s.count = 2;
+          setSwipeCount(2);
+          // Two swipes in same direction - change feather
+          if (newDirection === 'right') {
+            prevFeather();
+          } else {
+            nextFeather();
+          }
+          s.count = 0; // Reset after action
+          setTimeout(() => setSwipeCount(0), 400);
+        }
+
+        s.lastX = touch.clientX;
+        s.lastY = touch.clientY;
+      }
+    };
+
+    const handleTouchEnd = () => {
+      // Reset direction on touch end
+      swipeRef.current.direction = null;
+    };
+
+    window.addEventListener('touchmove', handleTouchMove);
+    window.addEventListener('touchend', handleTouchEnd);
+
+    return () => {
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+  }, [fullscreenProjection]);
 
   // Auto-route camera to first 4 sensors when a device connects on mobile.
   const prevDeviceConnectedRef = useRef(false);
@@ -1022,6 +1091,11 @@ export default function App() {
               +⧉ Add Devices
             </button>
           </div>
+          {swipeCount > 0 && (
+            <div className="wb-swipe-indicator">
+              {swipeCount === 1 ? '← swipe again →' : '↻ changing feather...'}
+            </div>
+          )}
           {showPair && (
             <DevicesPanel devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} />
           )}

@@ -198,6 +198,17 @@
 .wb-fs-controls { position: fixed; top: 12px; right: 12px; z-index: 201; display: flex; gap: 8px; }
 .wb-fs-exit { margin: 0; }
 .wb-fs-controls .wb-btn { font-size: 11px; padding: 8px 12px; }
+.wb-swipe-indicator {
+  position: fixed; bottom: 50%; left: 50%; transform: translateX(-50%); z-index: 200;
+  background: rgba(60, 120, 255, 0.9); color: #fff; padding: 12px 24px;
+  border-radius: 8px; font-size: 14px; letter-spacing: 0.05em;
+  animation: fadeInOut 0.6s ease-in-out;
+}
+@keyframes fadeInOut {
+  0% { opacity: 0; transform: translateX(-50%) scale(0.8); }
+  50% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(-50%) scale(1); }
+}
 
 /* ---- TE-style range sliders -------------------------------------------- */
 input[type='range'] {
