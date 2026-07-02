@@ -666,6 +666,26 @@ export default function App() {
 
         {mobileMenu && <MobileMenu camOn={camOn} onCam={() => setCamOn((v) => !v)} sources={sources} onSource={setSource} onClose={() => setMobileMenu(false)} deviceTier={DEVICE_TIER} lowPowerMode={lowPowerMode} onLowPowerMode={setLowPowerMode} />}
 
+        {camOn && !showPair && !showScene && !showRig && !showSettings && (
+          <div className="wb-camera-frame">
+            <canvas
+              key="camera-preview"
+              style={{
+                width: '100%',
+                height: '100%',
+                borderRadius: 4,
+                border: '1px solid #3aa0f5',
+                background: '#000',
+                display: 'block',
+                imageRendering: 'pixelated',
+              }}
+              ref={(el) => {
+                if (el) cam.attachPreview(el);
+              }}
+            />
+          </div>
+        )}
+
         <div className="wb-panels">
           {showPair && (
             <DevicesPanel devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} />

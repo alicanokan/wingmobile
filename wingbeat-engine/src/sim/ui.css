@@ -694,6 +694,13 @@ input[type='range']::-moz-range-thumb {
   width: 100%; font-size: 12px; padding: 10px 12px; text-align: center;
 }
 
+/* Persistent camera frame on mobile */
+.wb-camera-frame {
+  position: fixed; bottom: 92px; right: 8px; width: 140px; height: 140px;
+  z-index: 75; border-radius: 8px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+
 /* Compact camera panel on mobile */
 .wb-motion.compact {
   max-height: 50vh; overflow-y: auto;
