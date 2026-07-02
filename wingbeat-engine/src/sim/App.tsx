@@ -597,8 +597,12 @@ export default function App() {
   }, [transport]);
 
   const startAudio = async () => {
+    if (audioReady) {
+      setAudioReady(false);
+      return;
+    }
     await audio.init(masterGain);
-    await audio.resume(); // re-clicking "live" re-resumes a suspended context
+    await audio.resume();
     setAudioReady(true);
   };
 
@@ -711,8 +715,8 @@ export default function App() {
 
         <div className="wb-rail-sec">Audio</div>
         <div className="wb-rail-group">
-          <button className="wb-btn accent" onClick={startAudio} title={audioReady ? 'audio live — click to re-resume' : 'start audio'}>
-            {audioReady ? '♪ live' : 'Start audio'}
+          <button className={`wb-btn accent ${audioReady ? 'active' : ''}`} onClick={startAudio} title={audioReady ? 'click to stop audio' : 'click to start audio'}>
+            {audioReady ? '♪ Stop audio' : 'Start audio'}
           </button>
           <div className="wb-knob-row">
             <Knob
