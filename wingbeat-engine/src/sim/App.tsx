@@ -594,10 +594,12 @@ export default function App() {
     prevDeviceConnectedRef.current = anyDeviceConnected;
   }, [anyDeviceConnected, entryMode]);
 
-  // Auto-route devices to sensors in fullscreen based on device count.
+  // Auto-route devices to sensors in fullscreen/control based on device count.
   useEffect(() => {
-    if (entryMode !== 'fullscreen') return;
-    if (!fullscreenProjection) return;
+    const inFullscreen = entryMode === 'fullscreen' && fullscreenProjection;
+    const inControl = entryMode === 'control' && showPair;
+
+    if (!inFullscreen && !inControl) return;
 
     const connectedCount = devicePeers.reduce((sum, p) => sum + (p > 0 ? 1 : 0), 0);
 
@@ -641,7 +643,7 @@ export default function App() {
       if (connectedCount >= 0 && !camOn) setCamOn(true);
       return next;
     });
-  }, [devicePeers, fullscreenProjection, entryMode]);
+  }, [devicePeers, fullscreenProjection, showPair, entryMode]);
 
   // The rig (re)loads per feather inside the Projection; when it does (layer
   // rebuild), push that feather's authored tempo to the loop transport.
@@ -1039,7 +1041,7 @@ export default function App() {
 
       {/* CENTER — two linked views */}
       <div className="wb-body">
-        {showRoomMap && (
+        {showRoomMap && !showPair && (
           <div className="wb-pane">
             <div className="wb-pane-label">operator · room map</div>
             <OperatorMap snapshot={snapshot} sim={sim} />
