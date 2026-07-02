@@ -26,11 +26,20 @@ interface Props {
   sources: SourceMap;
   onSource: (slot: string, s: SourceKind) => void;
   onClose: () => void;
+  deviceTier?: 'ultra-low' | 'low' | 'mid' | 'high';
+  lowPowerMode?: boolean;
+  onLowPowerMode?: (v: boolean) => void;
 }
 
-export function MobileMenu({ camOn, onCam, sources, onSource, onClose }: Props) {
+export function MobileMenu({ camOn, onCam, sources, onSource, onClose, deviceTier, lowPowerMode, onLowPowerMode }: Props) {
   const [size, setSize] = useState(rig.global.size);
   const [rel, setRel] = useState(rig.global.release);
+
+  const deviceLabel =
+    deviceTier === 'ultra-low' ? 'Older device (optimized)' :
+    deviceTier === 'low' ? 'Low power device' :
+    deviceTier === 'mid' ? 'Modern mobile' :
+    'Desktop';
 
   return (
     <div className="wb-mx">
@@ -41,9 +50,19 @@ export function MobileMenu({ camOn, onCam, sources, onSource, onClose }: Props) 
         </button>
       </div>
 
+      {deviceTier && (
+        <div className="wb-mx-sec">Device: {deviceLabel}</div>
+      )}
+
       <button className={`wb-btn ${camOn ? 'active' : ''}`} style={{ width: '100%' }} onClick={onCam}>
         {camOn ? '● Camera on' : 'Camera off'}
       </button>
+
+      {lowPowerMode !== undefined && (
+        <button className={`wb-btn ${lowPowerMode ? 'active' : ''}`} style={{ width: '100%' }} onClick={() => onLowPowerMode?.(!lowPowerMode)}>
+          {lowPowerMode ? '⚡ Power saving on' : 'Power saving off'}
+        </button>
+      )}
 
       <div className="wb-mx-sec">Route → sensors</div>
       <div className="wb-mx-matrix">

@@ -116,7 +116,24 @@ export interface FeatherPreset {
   updatedAt?: number;
 }
 
-export const DEFAULT_GLOBAL: GlobalRig = { sway: 0.35, disperse: 0.4, audioReact: 0.8, size: 55, stability: 0.85, attack: 0.15, release: 0.08, amount: 1, bpm: 120, gravity: 0.45, hold: 0, pulseColor: [1, 0.85, 0.5], motion: 1, floatTime: 1.4, relief: 0.7, wingBeat: 0.6, audioColor: 0.7, autoAudio: false, idleFall: 5 };
+function getDefaultGlobal(): GlobalRig {
+  const baseDefaults: GlobalRig = { sway: 0.35, disperse: 0.4, audioReact: 0.8, size: 55, stability: 0.85, attack: 0.15, release: 0.08, amount: 1, bpm: 120, gravity: 0.45, hold: 0, pulseColor: [1, 0.85, 0.5], motion: 1, floatTime: 1.4, relief: 0.7, wingBeat: 0.6, audioColor: 0.7, autoAudio: false, idleFall: 5 };
+
+  // Reduce default particle density and size on old devices for better performance
+  if (DEVICE_TIER === 'ultra-low') {
+    return { ...baseDefaults, amount: 0.3, size: 35, motion: 0.8, audioReact: 0.6 };
+  }
+  if (DEVICE_TIER === 'low') {
+    return { ...baseDefaults, amount: 0.5, size: 45, motion: 0.9 };
+  }
+  if (DEVICE_TIER === 'mid') {
+    return { ...baseDefaults, amount: 0.8, size: 50 };
+  }
+
+  return baseDefaults;
+}
+
+export const DEFAULT_GLOBAL: GlobalRig = getDefaultGlobal();
 
 // particle sampling width derived from the amount (capped to protect the GPU).
 // Higher = the particles reconstruct the image at finer detail. The point size
@@ -125,19 +142,52 @@ export const PART_W_MIN = 150;
 export const PART_W_MAX = 1400;
 export const PART_W_REF = 205; // reference width at which point size == the slider value
 
-// Device-based particle budget. Phones / touch / low-core machines get FEWER
-// and SMALLER particles so the cloud stays smooth. This is a RENDER cap only —
-// it never rewrites the saved `amount`/`size` parameters, so switching to a
-// stronger device (or saving/recalling a preset) shows the full-quality values.
-export const IS_LOW_POWER =
-  typeof navigator !== 'undefined' &&
-  ((typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(max-width: 820px)').matches) ||
-    (navigator.maxTouchPoints ?? 0) > 1 ||
-    (navigator.hardwareConcurrency ?? 8) <= 4);
-/** Ceiling applied to `amount` on this device (0.5 on phones/low-power, 1 otherwise). */
-export const DEVICE_AMOUNT_CAP = IS_LOW_POWER ? 0.5 : 1;
+// Device capability detection for adaptive particle optimization.
+// Detects device tier (low-end, mid-range, high-end) and applies appropriate limits.
+function detectDeviceTier(): 'ultra-low' | 'low' | 'mid' | 'high' {
+  if (typeof navigator === 'undefined' || typeof window === 'undefined') return 'high';
+
+  const cores = navigator.hardwareConcurrency ?? 8;
+  const isMobile = window.matchMedia('(max-width: 820px)').matches;
+  const isTouchDevice = (navigator.maxTouchPoints ?? 0) > 1;
+  const memoryGB = ((navigator as any).deviceMemory ?? 8);
+
+  // Ultra-low-end: very old phones (2-core, <2GB RAM, or max-width < 600px)
+  if ((cores <= 2 && memoryGB < 2) || window.matchMedia('(max-width: 600px)').matches) {
+    return 'ultra-low';
+  }
+
+  // Low-end: older phones/tablets (<=4 cores, touch device)
+  if ((cores <= 4 || memoryGB < 4) && isTouchDevice) {
+    return 'low';
+  }
+
+  // Mid-range: modern phones/tablets
+  if (isMobile && isTouchDevice) {
+    return 'mid';
+  }
+
+  // High-end: desktop/laptop
+  return 'high';
+}
+
+export const DEVICE_TIER = detectDeviceTier();
+export const IS_LOW_POWER = DEVICE_TIER === 'low' || DEVICE_TIER === 'ultra-low';
+export const IS_ULTRA_LOW = DEVICE_TIER === 'ultra-low';
+
+/** Ceiling applied to `amount` on this device. */
+export const DEVICE_AMOUNT_CAP =
+  DEVICE_TIER === 'ultra-low' ? 0.3 :  // very old phones: max 30% particles
+  DEVICE_TIER === 'low' ? 0.5 :         // old phones: max 50% particles
+  DEVICE_TIER === 'mid' ? 0.8 :         // modern phones: max 80% particles
+  1;                                     // desktop: full 100%
+
 /** Multiplier applied to point size on this device. */
-export const DEVICE_SIZE_SCALE = IS_LOW_POWER ? 0.72 : 1;
+export const DEVICE_SIZE_SCALE =
+  DEVICE_TIER === 'ultra-low' ? 0.55 :  // very old: 55% size
+  DEVICE_TIER === 'low' ? 0.72 :         // old: 72% size
+  DEVICE_TIER === 'mid' ? 0.85 :         // modern: 85% size
+  1;                                      // desktop: 100%
 
 export function particleSampleW(): number {
   const amount = Math.min(Math.max(0, Math.min(1, rig.global.amount)), DEVICE_AMOUNT_CAP);

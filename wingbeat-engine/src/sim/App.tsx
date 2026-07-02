@@ -48,6 +48,7 @@ import {
   deviceIndex,
   type SourceKind,
 } from './inputs.ts';
+import { DEVICE_TIER } from './rig.ts';
 
 type Mode = 'sim' | 'mqtt';
 
@@ -68,6 +69,7 @@ export default function App() {
   const [micOn, setMicOn] = useState(false);
   const [camOn, setCamOn] = useState(false);
   const [fullscreenProjection, setFullscreenProjection] = useState(false);
+  const [lowPowerMode, setLowPowerMode] = useState(DEVICE_TIER === 'ultra-low' || DEVICE_TIER === 'low');
   const [feather, setFeatherState] = useState(DEFAULT_FEATHER);
   const [showCollection, setShowCollection] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
@@ -640,7 +642,7 @@ export default function App() {
           </button>
         </div>
 
-        {mobileMenu && <MobileMenu camOn={camOn} onCam={() => setCamOn((v) => !v)} sources={sources} onSource={setSource} onClose={() => setMobileMenu(false)} />}
+        {mobileMenu && <MobileMenu camOn={camOn} onCam={() => setCamOn((v) => !v)} sources={sources} onSource={setSource} onClose={() => setMobileMenu(false)} deviceTier={DEVICE_TIER} lowPowerMode={lowPowerMode} onLowPowerMode={setLowPowerMode} />}
 
         <div className="wb-panels">
           {showPair && (
