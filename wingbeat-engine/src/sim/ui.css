@@ -195,7 +195,9 @@
 .wb-feather-fs:hover { opacity: 1; border-color: #7c3aed; color: #fff; }
 
 .wb-fs { position: fixed; inset: 0; height: 100%; z-index: 200; background: #040406; }
-.wb-fs-exit { position: fixed; top: 12px; right: 12px; z-index: 201; }
+.wb-fs-controls { position: fixed; top: 12px; right: 12px; z-index: 201; display: flex; gap: 8px; }
+.wb-fs-exit { margin: 0; }
+.wb-fs-controls .wb-btn { font-size: 11px; padding: 8px 12px; }
 
 /* ---- TE-style range sliders -------------------------------------------- */
 input[type='range'] {

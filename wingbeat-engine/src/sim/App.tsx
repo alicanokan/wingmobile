@@ -524,6 +524,55 @@ export default function App() {
     prevDeviceConnectedRef.current = anyDeviceConnected;
   }, [anyDeviceConnected, entryMode]);
 
+  // Auto-route devices to sensors in fullscreen based on device count.
+  useEffect(() => {
+    if (entryMode !== 'fullscreen') return;
+    if (!fullscreenProjection) return;
+
+    const connectedCount = devicePeers.reduce((sum, p) => sum + (p > 0 ? 1 : 0), 0);
+
+    setRouting((r) => {
+      const sources = { ...r.sources };
+
+      if (connectedCount === 0) {
+        for (let i = 0; i < 4; i++) sources[`slot_${i + 1}`] = 'camera';
+        sources['slot_5'] = 'off';
+      } else if (connectedCount === 1) {
+        for (let i = 0; i < 4; i++) sources[`slot_${i + 1}`] = 'camera';
+        sources['slot_5'] = 'dev1';
+      } else if (connectedCount === 2) {
+        sources['slot_1'] = 'dev2';
+        sources['slot_2'] = 'camera';
+        sources['slot_3'] = 'camera';
+        sources['slot_4'] = 'camera';
+        sources['slot_5'] = 'dev1';
+      } else if (connectedCount === 3) {
+        sources['slot_1'] = 'dev2';
+        sources['slot_2'] = 'dev3';
+        sources['slot_3'] = 'camera';
+        sources['slot_4'] = 'camera';
+        sources['slot_5'] = 'dev1';
+      } else if (connectedCount === 4) {
+        sources['slot_1'] = 'dev2';
+        sources['slot_2'] = 'dev3';
+        sources['slot_3'] = 'dev4';
+        sources['slot_4'] = 'camera';
+        sources['slot_5'] = 'dev1';
+      } else if (connectedCount >= 5) {
+        sources['slot_1'] = 'dev5';
+        sources['slot_2'] = 'dev3';
+        sources['slot_3'] = 'dev4';
+        sources['slot_4'] = 'off';
+        sources['slot_5'] = 'dev1';
+      }
+
+      const next = { ...r, sources };
+      saveRouting(next);
+      if (connectedCount >= 0 && !camOn) setCamOn(true);
+      return next;
+    });
+  }, [devicePeers, fullscreenProjection, entryMode]);
+
   // The rig (re)loads per feather inside the Projection; when it does (layer
   // rebuild), push that feather's authored tempo to the loop transport.
   useEffect(() => onLayersChange(() => audio.setBpm(rig.global.bpm)), [audio]);
@@ -964,9 +1013,17 @@ export default function App() {
 
       {fullscreenProjection && (
         <div className="wb-fs">
-          <button className="wb-btn wb-fs-exit" onClick={() => setFullscreenProjection(false)}>
-            ✕ exit
-          </button>
+          <div className="wb-fs-controls">
+            <button className="wb-btn wb-fs-exit" onClick={() => setFullscreenProjection(false)}>
+              ✕ exit
+            </button>
+            <button className={`wb-btn ${showPair ? 'active' : ''}`} onClick={() => setShowPair((v) => !v)}>
+              +⧉ Add Devices
+            </button>
+          </div>
+          {showPair && (
+            <DevicesPanel devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} />
+          )}
           <Projection engine={engine} audio={audio} featherId={feather} paused={featherOpen} />
         </div>
       )}
