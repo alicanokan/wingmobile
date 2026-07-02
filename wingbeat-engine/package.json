@@ -1,0 +1,36 @@
+{
+  "name": "wingbeat-engine",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Transport-agnostic engine for the Wing Beat interactive installation. One brain drives the simulation and the real ESP8266/MQTT hardware.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
+    "mqtt": "^5.10.1",
+    "peerjs": "^1.5.5",
+    "qrcode": "^1.5.4",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "three": "^0.182.0",
+    "tone": "^15.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.182.0",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0",
+    "ws": "^8.21.0"
+  }
+}
