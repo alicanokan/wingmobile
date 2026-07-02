@@ -263,6 +263,8 @@ input[type='range']::-moz-range-thumb {
   overflow-y: hidden;
   background: linear-gradient(to top, rgba(5,5,8,0.96), rgba(5,5,8,0.0));
   scrollbar-width: thin;
+  contain: layout style paint;
+  will-change: transform;
 }
 .wb-feather {
   flex: 0 0 auto;
@@ -278,10 +280,12 @@ input[type='range']::-moz-range-thumb {
   display: flex;
   align-items: center;
   justify-content: center;
+  will-change: transform;
+  transform: translateZ(0);
 }
 .wb-feather:hover { border-color: #666; transform: translateY(-2px); }
 .wb-feather.active { border-color: #fff; box-shadow: 0 0 10px rgba(255,255,255,0.25); }
-.wb-feather img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.wb-feather img { width: 100%; height: 100%; object-fit: contain; display: block; contain: strict; }
 .wb-feather-proc { color: #c4a8ff; font-size: 22px; }
 
 /* settings + mixer panel */
@@ -657,4 +661,13 @@ input[type='range']::-moz-range-thumb {
   overflow-y: auto; background: rgba(7, 7, 10, 0.97); border-top: 1px solid #23232e; border-radius: 14px 14px 0 0; padding: 8px;
 }
 .wb-mobileexp .wb-panels:not(:empty) > * { width: 100% !important; max-width: 100% !important; margin: 0 0 8px 0; }
-.wb-collection-exp { position: fixed; bottom: 0; left: 0; right: 0; z-index: 60; max-height: 92px; }
+.wb-collection-exp { position: fixed; bottom: 0; left: 0; right: 0; z-index: 60; max-height: 92px; contain: layout; }
+.wb-collection-more {
+  flex: 0 0 44px;
+  height: 92px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #8a8a9a;
+}

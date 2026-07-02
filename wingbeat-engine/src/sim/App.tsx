@@ -626,7 +626,7 @@ export default function App() {
       <div className="wb-mobileexp">
         <Projection engine={engine} audio={audio} featherId={feather} paused={false} />
 
-        <DeviceHud peers={devicePeers} levels={levels} onOpen={() => setShowPair(true)} />
+        {!mobileMenu && !showPair && !camOn && <DeviceHud peers={devicePeers} levels={levels} onOpen={() => setShowPair(true)} />}
 
         <div className="wb-mx-top">
           <button className="wb-mx-icon" onClick={() => setEntryMode(null)} title="back to menu">
@@ -649,13 +649,16 @@ export default function App() {
           {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} />}
         </div>
 
-        <div className="wb-collection wb-collection-exp">
-          {FEATHERS.map((f) => (
-            <button key={f.id} className={`wb-feather ${feather === f.id ? 'active' : ''}`} onClick={() => chooseFeather(f.id)} title={f.label}>
-              {f.procedural ? <span className="wb-feather-proc">✦</span> : <img src={f.src.replace('/feathers/', '/feathers/thumbs/')} alt={f.label} loading="lazy" decoding="async" />}
-            </button>
-          ))}
-        </div>
+        {!mobileMenu && !showPair && !camOn && (
+          <div className="wb-collection wb-collection-exp">
+            {FEATHERS.slice(0, 12).map((f) => (
+              <button key={f.id} className={`wb-feather ${feather === f.id ? 'active' : ''}`} onClick={() => chooseFeather(f.id)} title={f.label}>
+                {f.procedural ? <span className="wb-feather-proc">✦</span> : <img src={f.src.replace('/feathers/', '/feathers/thumbs/')} alt={f.label} loading="lazy" decoding="async" />}
+              </button>
+            ))}
+            {FEATHERS.length > 12 && <span className="wb-collection-more">+{FEATHERS.length - 12}</span>}
+          </div>
+        )}
       </div>
     );
   }
