@@ -1,0 +1,23 @@
+version: "3.8"
+
+# Wing BEat — MQTT broker (Mosquitto)
+#
+# Two listeners:
+#   1883 → native MQTT (for ESP8266 nodes)
+#   9001 → MQTT over WebSocket (for the browser UI)
+#
+# Run:  cd broker && docker compose up -d
+# Logs: docker compose logs -f mosquitto
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: wingbeat-mqtt
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log

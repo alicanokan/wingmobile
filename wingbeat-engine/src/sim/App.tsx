@@ -85,6 +85,7 @@ export default function App() {
   // Landing entry mode (null = show the landing screen, every visit).
   const [entryMode, setEntryMode] = useState<EntryMode | null>(null);
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [mobileFirstTime, setMobileFirstTime] = useState(() => !localStorage.getItem('wb.mobile.setup'));
 
   // Up to DEVICE_COUNT independent phone controllers, each its own room (Device
   // ID + Code) and its own routable source dev1..dev5. Live motion per device is
@@ -635,6 +636,9 @@ export default function App() {
         {!mobileMenu && !showPair && !camOn && <DeviceHud peers={devicePeers} levels={levels} onOpen={() => setShowPair(true)} />}
 
         <div className="wb-mx-top">
+          <button className={`wb-mx-icon ${audioReady ? 'on' : ''}`} onClick={startAudio} title={audioReady ? 'stop audio' : 'start audio'}>
+            {audioReady ? '♪' : '🔊'}
+          </button>
           <button className="wb-mx-icon" onClick={() => setEntryMode(null)} title="back to menu">
             ☰
           </button>
@@ -646,13 +650,27 @@ export default function App() {
           </button>
         </div>
 
+        {mobileFirstTime && (
+          <div className="wb-modal-overlay">
+            <div className="wb-modal-content">
+              <div className="wb-modal-head">Welcome to Wing Beat Mobile</div>
+              <div className="wb-modal-text">What would you like to enable?</div>
+              <div className="wb-modal-buttons">
+                <button className="wb-btn" onClick={() => { setCamOn(true); localStorage.setItem('wb.mobile.setup', '1'); setMobileFirstTime(false); }}>📷 Camera</button>
+                <button className="wb-btn" onClick={() => { setMicOn(true); localStorage.setItem('wb.mobile.setup', '1'); setMobileFirstTime(false); }}>🎤 Microphone</button>
+                <button className="wb-btn" onClick={() => { localStorage.setItem('wb.mobile.setup', '1'); setMobileFirstTime(false); }}>Skip</button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {mobileMenu && <MobileMenu camOn={camOn} onCam={() => setCamOn((v) => !v)} sources={sources} onSource={setSource} onClose={() => setMobileMenu(false)} deviceTier={DEVICE_TIER} lowPowerMode={lowPowerMode} onLowPowerMode={setLowPowerMode} />}
 
         <div className="wb-panels">
           {showPair && (
             <DevicesPanel devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} />
           )}
-          {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} />}
+          {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} compact={entryMode === 'mobile'} />}
         </div>
 
         {!mobileMenu && !showPair && !camOn && (

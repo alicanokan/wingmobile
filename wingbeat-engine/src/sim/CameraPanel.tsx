@@ -15,9 +15,10 @@ interface Props {
   cam: CameraSource;
   onClose: () => void;
   onDisable: () => void;
+  compact?: boolean;
 }
 
-export function CameraPanel({ cam, onClose, onDisable }: Props) {
+export function CameraPanel({ cam, onClose, onDisable, compact }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [hud, setHud] = useState(0);
@@ -46,7 +47,7 @@ export function CameraPanel({ cam, onClose, onDisable }: Props) {
   }, [cam]);
 
   return (
-    <div className="wb-motion">
+    <div className={`wb-motion ${compact ? 'compact' : ''}`}>
       <div className="wb-settings-head">
         <span>Camera · Motion Theremin</span>
         <button className="wb-btn" style={{ padding: '2px 8px' }} onClick={onClose}>
@@ -54,9 +55,11 @@ export function CameraPanel({ cam, onClose, onDisable }: Props) {
         </button>
       </div>
 
-      <div className="wb-settings-note">
-        White pixels are detected movement. Patch the camera onto a sensor point in the Inputs matrix; this panel tunes detection and the release tail.
-      </div>
+      {!compact && (
+        <div className="wb-settings-note">
+          White pixels are detected movement. Patch the camera onto a sensor point in the Inputs matrix; this panel tunes detection and the release tail.
+        </div>
+      )}
 
       <button className="wb-btn" style={{ width: '100%', marginBottom: 4 }} onClick={onDisable} title="Stop the webcam and clear camera routing">
         ⏻ Turn off camera

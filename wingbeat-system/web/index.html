@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Wing BEat — Live</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>Wing BEat</h1>
+      <span class="sub" id="brokerStatus">connecting…</span>
+    </div>
+    <nav class="scenes" id="sceneBar"></nav>
+    <div class="actions">
+      <button id="btnStart" class="primary">Start audio</button>
+      <button id="btnPanel">Operator</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Feather formation canvas -->
+    <svg id="canvas" viewBox="0 0 1600 900" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <radialGradient id="bgGlow" cx="50%" cy="50%" r="60%">
+          <stop offset="0%"  stop-color="#1a1a2a" stop-opacity="1"/>
+          <stop offset="100%" stop-color="#04040a" stop-opacity="1"/>
+        </radialGradient>
+        <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur stdDeviation="1.2"/>
+        </filter>
+      </defs>
+      <rect width="1600" height="900" fill="url(#bgGlow)"/>
+      <g id="feathers"></g>
+      <g id="overlay"></g>
+    </svg>
+
+    <!-- Operator panel (slide-in) -->
+    <aside id="panel" class="panel hidden">
+      <h2>Operator</h2>
+      <section>
+        <h3>Nodes</h3>
+        <div id="nodeList" class="nodes">— waiting for nodes —</div>
+      </section>
+      <section>
+        <h3>Master</h3>
+        <label>Master gain
+          <input id="masterGain" type="range" min="0" max="1" step="0.01" value="0.7"/>
+        </label>
+        <label>Wind sensitivity
+          <input id="windSens" type="range" min="0.2" max="3" step="0.05" value="1"/>
+        </label>
+      </section>
+      <section>
+        <h3>Global commands</h3>
+        <button data-cmd="rainbow">Rainbow burst</button>
+        <button data-cmd="silence">Silence audio nodes</button>
+        <button data-cmd="reset" class="danger">Reset all</button>
+      </section>
+      <section>
+        <h3>Test feather</h3>
+        <p class="muted">Inject a fake sensor stream so you can demo without hardware.</p>
+        <button id="btnFakeNode">Spawn test feather</button>
+      </section>
+    </aside>
+  </main>
+
+  <!-- Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mqtt@5.3.4/dist/mqtt.min.js"></script>
+  <!-- App -->
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

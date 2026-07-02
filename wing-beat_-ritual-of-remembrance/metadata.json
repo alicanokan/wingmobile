@@ -1,0 +1,8 @@
+{
+  "name": "Wing Beat: Ritual of Remembrance",
+  "description": "An immersive audio-reactive sound installation exploring cultural memory through the anatomy of a feather.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": []
+}
