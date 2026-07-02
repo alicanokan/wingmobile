@@ -29,9 +29,11 @@ interface Props {
   deviceTier?: 'ultra-low' | 'low' | 'mid' | 'high';
   lowPowerMode?: boolean;
   onLowPowerMode?: (v: boolean) => void;
+  showCollection?: boolean;
+  onShowCollection?: (v: boolean) => void;
 }
 
-export function MobileMenu({ camOn, onCam, sources, onSource, onClose, deviceTier, lowPowerMode, onLowPowerMode }: Props) {
+export function MobileMenu({ camOn, onCam, sources, onSource, onClose, deviceTier, lowPowerMode, onLowPowerMode, showCollection, onShowCollection }: Props) {
   const [size, setSize] = useState(rig.global.size);
   const [rel, setRel] = useState(rig.global.release);
 
@@ -61,6 +63,12 @@ export function MobileMenu({ camOn, onCam, sources, onSource, onClose, deviceTie
       {lowPowerMode !== undefined && (
         <button className={`wb-btn ${lowPowerMode ? 'active' : ''}`} style={{ width: '100%' }} onClick={() => onLowPowerMode?.(!lowPowerMode)}>
           {lowPowerMode ? '⚡ Power saving on' : 'Power saving off'}
+        </button>
+      )}
+
+      {showCollection !== undefined && (
+        <button className={`wb-btn ${showCollection ? 'active' : ''}`} style={{ width: '100%' }} onClick={() => onShowCollection?.(!showCollection)}>
+          {showCollection ? '❖ Collection visible' : 'Collection hidden'}
         </button>
       )}
 

@@ -72,6 +72,7 @@ export default function App() {
   const [lowPowerMode, setLowPowerMode] = useState(DEVICE_TIER === 'ultra-low' || DEVICE_TIER === 'low');
   const [feather, setFeatherState] = useState(DEFAULT_FEATHER);
   const [showCollection, setShowCollection] = useState(true);
+  const [mobileShowCollection, setMobileShowCollection] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [showRig, setShowRig] = useState(false);
   const [showMatrix, setShowMatrix] = useState(false);
@@ -713,7 +714,7 @@ export default function App() {
           </div>
         )}
 
-        {mobileMenu && <MobileMenu camOn={camOn} onCam={() => setCamOn((v) => !v)} sources={sources} onSource={setSource} onClose={() => setMobileMenu(false)} deviceTier={DEVICE_TIER} lowPowerMode={lowPowerMode} onLowPowerMode={setLowPowerMode} />}
+        {mobileMenu && <MobileMenu camOn={camOn} onCam={() => setCamOn((v) => !v)} sources={sources} onSource={setSource} onClose={() => setMobileMenu(false)} deviceTier={DEVICE_TIER} lowPowerMode={lowPowerMode} onLowPowerMode={setLowPowerMode} showCollection={mobileShowCollection} onShowCollection={setMobileShowCollection} />}
 
         {camOn && !showPair && !showScene && !showRig && !showSettings && (
           <div className="wb-camera-frame">
@@ -742,7 +743,7 @@ export default function App() {
           {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} compact={entryMode === 'mobile'} />}
         </div>
 
-        {!mobileMenu && !showPair && !camOn && (
+        {!mobileMenu && !showPair && !camOn && mobileShowCollection && (
           <div className="wb-collection wb-collection-exp">
             {FEATHERS.slice(0, 12).map((f) => (
               <button key={f.id} className={`wb-feather ${feather === f.id ? 'active' : ''}`} onClick={() => chooseFeather(f.id)} title={f.label}>
