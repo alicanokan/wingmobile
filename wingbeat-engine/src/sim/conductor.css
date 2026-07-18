@@ -184,6 +184,19 @@
 .cond-audioin-fill { height: 100%; width: 0%; border-radius: 4px; background: linear-gradient(90deg, #3f7fd8, #9ecbff); transition: width 60ms linear; }
 .cond-audioin-val { font-size: 10px; color: #9ecbff; text-align: right; font-variant-numeric: tabular-nums; }
 
+/* the four sliders that shape a pulse, grouped so it reads as one control set */
+.cond-pulsegrp {
+  border: 1px solid #26263a;
+  border-left: 3px solid #2f7d4a;
+  border-radius: 6px;
+  padding: 4px 6px 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: #0d0d16;
+}
+.cond-pulsegrp-head { font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: #8fe3ae; margin-bottom: 1px; }
+
 /* sample library block inside the audio engine */
 .cond-lib { flex: 0 0 auto; border-top: 1px solid #1c1c2b; padding-top: 6px; }
 .cond-lib-head { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #71718a; margin-bottom: 5px; }
@@ -713,3 +726,5 @@
 .cond-light .cond-audioin-src { color: #6f6f7a; }
 .cond-light .cond-audioin-bar { background: #eceae2; border-color: #d8d6cc; }
 .cond-light .cond-audioin-val { color: #2266aa; }
+.cond-light .cond-pulsegrp { background: #fbfaf6; border-color: #e2e0d8; border-left-color: #34c46e; }
+.cond-light .cond-pulsegrp-head { color: #1f8a4c; }

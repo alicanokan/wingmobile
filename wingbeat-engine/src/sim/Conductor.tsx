@@ -145,10 +145,12 @@ function AirMeter({ airRef, sensorId }: { airRef: React.RefObject<Record<string,
 /** The audio channel(s) routed INTO this part, with the live filtered level
  *  they're feeding it (loudest wins, matching the engine's router). */
 function RoutedAudioIn({
-  audio, sources,
+  audio, sources, airRef, sensorId,
 }: {
   audio: AudioEngine;
   sources: { id: string; label: string; eqOn: boolean; band: SensorRig['audioBand']; range?: [number, number] }[];
+  airRef: React.RefObject<Record<string, number>>;
+  sensorId: string;
 }) {
   const fillRef = useRef<HTMLDivElement | null>(null);
   const valRef = useRef<HTMLSpanElement | null>(null);
@@ -168,13 +170,17 @@ function RoutedAudioIn({
           if (x > v) v = x;
         }
       }
+      // GATED by this part's air, so it shows what the part actually receives.
+      // A loop keeps analysing while it plays silently, and an ungated bar here
+      // reads as "there's still audio" when nothing is in fact getting through.
+      v *= Math.min(1, airRef.current?.[sensorId] ?? 0);
       if (fillRef.current) fillRef.current.style.width = `${Math.round(Math.min(1, v) * 100)}%`;
       if (valRef.current) valRef.current.textContent = v.toFixed(2);
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [audio]);
+  }, [audio, airRef, sensorId]);
   return (
     <div className="cond-audioin">
       <div className="cond-audioin-top">
@@ -222,7 +228,12 @@ export default function Conductor() {
       return n;
     });
   const loadedSample = useRef<Record<string, string>>({}); // sensorId → sample id currently loaded in the preview
-  const air = useRef<Record<string, number>>({}); // sensorId → balloon air 0..1 (pumped by Pulse, leaks out)
+  // The balloon, as a two-stage AR envelope. `airTarget` is how much air has been
+  // pumped in (Pulse adds to it; it leaks out at RELEASE). `airLevel` chases the
+  // target at ATTACK when inflating / RELEASE when deflating, and IS the value
+  // that drives the sensor — so sound and picture share one gate: no air, nothing.
+  const airTarget = useRef<Record<string, number>>({});
+  const airLevel = useRef<Record<string, number>>({});
 
   useEffect(() => {
     previewSim.connect(previewEngine);
@@ -233,11 +244,11 @@ export default function Conductor() {
     // continuously in this small preview. Only the assigned loop samples play.)
     const offNode = previewEngine.on('node', (e: { id: string; state: { wind: number; present: boolean } }) => {
       if (!e.id.startsWith('sensor_') || !previewAudio.hasLoop(e.id)) return;
-      // The sensor's OUTPUT (its sensitivity-scaled wind) masters the audible
-      // volume, so turning Sensitivity down makes the loop quieter — matching
-      // the signal-flow (sensor output → volume level amount → mixer).
+      // Volume tracks the balloon's air level (the sensor's output), so the loop
+      // fades in on Attack and out on Release with the picture, and is SILENT
+      // whenever there's no air — no pulse, no sound.
       const out = e.state.wind;
-      previewAudio.setLoopGain(e.id, out > 0.03 ? Math.min(1.2, 0.15 + out) : 0);
+      previewAudio.setLoopGain(e.id, out > 0.02 ? Math.min(1.2, out * 1.2) : 0);
     });
     return () => {
       offNode();
@@ -250,10 +261,14 @@ export default function Conductor() {
     loadIntoRig(cfg.preset);
   }, [cfg]);
 
-  // BALLOON LEAK: air pumped in by Pulse bleeds back out at a rate that follows
-  // the sensor's Release, and the current air level is what drives the sensor.
-  // So a burst of pulses inflates it loud+lively and it settles back to silence
-  // on its own. Sensors under Test are skipped — Test holds them open.
+  // THE BALLOON ENVELOPE — the single thing that drives every sensor here.
+  //   · Pulse pumps air into `airTarget`; it leaks out at the part's RELEASE.
+  //   · Test simply holds the target open at Sensitivity instead of leaking, so
+  //     Test can't bypass the gate the way a direct hold used to (you'd hear the
+  //     loop while "Pulse air" honestly read 0.00).
+  //   · `airLevel` chases the target at ATTACK rising / RELEASE falling, and is
+  //     what actually reaches the engine — so Attack/Release shape the pulse's
+  //     sound and picture together, and no air means silence.
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
@@ -262,16 +277,26 @@ export default function Conductor() {
       last = t;
       for (const c of SENSOR_CHANNELS) {
         const id = c.sensor;
-        if (testingSensors.has(id)) continue;
-        const a = air.current[id] ?? 0;
-        if (a <= 0) continue;
-        const rel = cfg.preset.sensors[id]?.release ?? 0.08;
-        const next = a - dt * (0.18 + rel * 2.2);
+        const s = cfg.preset.sensors[id];
+        const atk = s?.attack ?? 0.15;
+        const rel = s?.release ?? 0.08;
+        const sens = Math.min(1, s?.sensitivity ?? 1);
+
+        let tgt = testingSensors.has(id) ? sens : airTarget.current[id] ?? 0;
+        if (!testingSensors.has(id) && tgt > 0) tgt = Math.max(0, tgt - dt * (0.2 + rel * 5));
+        airTarget.current[id] = tgt;
+
+        const lvl = airLevel.current[id] ?? 0;
+        // per-frame lerp rates are authored at 60fps; scale by dt to stay steady
+        const rate = Math.min(1, (tgt > lvl ? atk : rel) * 60 * dt);
+        const next = lvl + (tgt - lvl) * rate;
+
         if (next > 0.02) {
-          air.current[id] = next;
+          airLevel.current[id] = next;
+          previewSim.setPresence(id, true);
           previewSim.holdWind(id, next);
-        } else {
-          air.current[id] = 0;
+        } else if (lvl > 0.02) {
+          airLevel.current[id] = 0;
           previewSim.releaseWind(id);
           previewSim.setPresence(id, false);
         }
@@ -280,17 +305,6 @@ export default function Conductor() {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [cfg, testingSensors, previewSim]);
-
-  // While a sensor is under Test, keep its injected level tied to its LIVE
-  // Sensitivity so dragging the slider visibly changes the motion + volume in
-  // the preview (previously Test held a fixed full signal, so Sensitivity did
-  // nothing on this page).
-  useEffect(() => {
-    testingSensors.forEach((sid) => {
-      const sens = cfg.preset.sensors[sid]?.sensitivity ?? 1;
-      previewSim.holdWind(sid, Math.min(1, sens));
-    });
   }, [cfg, testingSensors, previewSim]);
 
   /** Stop a sensor's test — releases wind/presence so the shader's own Release
@@ -305,7 +319,8 @@ export default function Conductor() {
     previewSim.setPresence(sensorId, false);
     previewAudio.clearLoop(sensorId);
     delete loadedSample.current[sensorId];
-    air.current[sensorId] = 0; // let all the balloon air out too
+    airTarget.current[sensorId] = 0; // let all the balloon air out too
+    airLevel.current[sensorId] = 0;
     setTestingSensors((s) => {
       if (!s.has(sensorId)) return s;
       const n = new Set(s);
@@ -343,12 +358,9 @@ export default function Conductor() {
   const startSensorTest = async (sensorId: string) => {
     try {
       await ensureLoop(sensorId);
-      // Inject a full breath SCALED by this sensor's sensitivity, so the test
-      // reflects the same input gain the real installation applies. The live
-      // effect below keeps it in sync while you drag the Sensitivity slider.
-      const sens = cfg.preset.sensors[sensorId]?.sensitivity ?? 1;
-      previewSim.setPresence(sensorId, true);
-      previewSim.holdWind(sensorId, Math.min(1, sens));
+      // No direct hold: the balloon envelope above sees this sensor is testing
+      // and holds its target open at Sensitivity, so Test ramps in on Attack and
+      // reads truthfully on the Pulse-air meter like everything else.
       setTestingSensors((s) => new Set(s).add(sensorId));
     } catch (e) {
       setStatus(String(e));
@@ -377,11 +389,9 @@ export default function Conductor() {
     try {
       await ensureLoop(sensorId); // a pulse has to be able to make sound
       const sens = cfg.preset.sensors[sensorId]?.sensitivity ?? 1;
-      const puff = 0.4 * Math.min(1.5, sens);
-      const next = Math.min(1, (air.current[sensorId] ?? 0) + puff);
-      air.current[sensorId] = next;
-      previewSim.setPresence(sensorId, true);
-      previewSim.holdWind(sensorId, next);
+      const puff = 0.4 * Math.min(1.5, sens); // Sensitivity = air per pulse
+      airTarget.current[sensorId] = Math.min(1, (airTarget.current[sensorId] ?? 0) + puff);
+      // the envelope loop takes it from here: inflate at Attack, leak at Release
     } catch (e) {
       setStatus(String(e));
     }
@@ -762,9 +772,9 @@ export default function Conductor() {
                       </button>
                     </div>
 
-                    <AirMeter airRef={air} sensorId={c.sensor} />
+                    <AirMeter airRef={airLevel} sensorId={c.sensor} />
 
-                    {audioIn.length > 0 && <RoutedAudioIn audio={previewAudio} sources={audioIn} />}
+                    {audioIn.length > 0 && <RoutedAudioIn audio={previewAudio} sources={audioIn} airRef={airLevel} sensorId={c.sensor} />}
 
                     <div className="cond-field-row">
                       <label className="cond-field">
@@ -788,10 +798,13 @@ export default function Conductor() {
                         ))}
                       </div>
                     </div>
-                    <Slider label="Sensitivity" value={s.sensitivity ?? 1} min={0.2} max={3} step={0.05} onChange={(v) => patchSensor(c.sensor, (x) => { x.sensitivity = v; })} fmt={(v) => `${v.toFixed(2)}×`} />
-                    <Slider label="Attack" value={s.attack} min={0.03} max={0.6} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.attack = v; x.modules.release = true; })} />
-                    <Slider label="Release" value={s.release} min={0.02} max={0.4} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.release = v; x.modules.release = true; })} />
-                    <Slider label="Reach" value={s.reach} min={0} max={1} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.reach = v; })} />
+                    <div className="cond-pulsegrp">
+                      <div className="cond-pulsegrp-head">Pulse response</div>
+                      <Slider label="Sensitivity" value={s.sensitivity ?? 1} min={0.2} max={3} step={0.05} onChange={(v) => patchSensor(c.sensor, (x) => { x.sensitivity = v; })} fmt={(v) => `${v.toFixed(2)}×`} />
+                      <Slider label="Attack" value={s.attack} min={0.03} max={0.6} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.attack = v; x.modules.release = true; })} />
+                      <Slider label="Release" value={s.release} min={0.02} max={0.4} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.release = v; x.modules.release = true; })} />
+                      <Slider label="Reach" value={s.reach} min={0} max={1} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.reach = v; })} />
+                    </div>
                     <div className="cond-field-row">
                       <label className="cond-check">
                         <input type="checkbox" checked={s.modules.movement} onChange={(e) => patchSensor(c.sensor, (x) => { x.modules.movement = e.target.checked; })} />
