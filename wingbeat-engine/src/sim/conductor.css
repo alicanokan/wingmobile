@@ -1,23 +1,27 @@
 /* /conductor — preset generator for the whole installation */
 
+/* The page itself never scrolls: the shell fills the viewport and only the two
+   engine panels scroll internally, so the header, video output and the global
+   row stay put no matter how many channels/parts there are. */
 .cond-shell {
   position: fixed;
   inset: 0;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   background: #07070c;
   color: #cfcfda;
-  font: 300 13px/1.5 ui-sans-serif, system-ui, sans-serif;
+  font: 300 12px/1.4 ui-sans-serif, system-ui, sans-serif;
 }
 
 .cond-head {
-  position: sticky;
-  top: 0;
+  flex: 0 0 auto;
   z-index: 5;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 16px;
+  padding: 7px 14px;
   background: rgba(10, 10, 16, 0.92);
   backdrop-filter: blur(8px);
   border-bottom: 1px solid #1d1d2a;
@@ -51,37 +55,44 @@
   .cond-cols { grid-template-columns: 1fr; }
 }
 
-/* ═══ two engine panels side by side ═══ */
+/* ═══ two engine panels side by side, filling the viewport ═══ */
 .cond-engines {
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(520px, 1.6fr);
-  gap: 16px;
-  padding: 16px;
-  align-items: start;
+  grid-template-columns: minmax(320px, 1fr) minmax(480px, 1.75fr);
+  gap: 12px;
+  padding: 14px 12px 8px;
+  align-items: stretch;
 }
 @media (max-width: 1100px) {
   .cond-engines { grid-template-columns: 1fr; }
 }
 
+/* each panel scrolls its own list — the page never scrolls. NOTE: overflow must
+   stay visible here or the pill label (top: -10px) gets clipped; the inner
+   .cond-achans / .cond-vparts own the scrolling instead. */
 .cond-engine {
   position: relative;
+  min-height: 0;
+  overflow: visible;
   background: #0d0d15;
   border: 1px solid #23233a;
-  border-radius: 12px;
-  padding: 26px 14px 14px;
+  border-radius: 11px;
+  padding: 17px 9px 9px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 7px;
 }
 .cond-engine-head {
   position: absolute;
-  top: -13px;
-  left: 16px;
+  top: -10px;
+  left: 13px;
   background: #16161f;
   border: 1px solid #23233a;
-  border-radius: 8px;
-  padding: 5px 14px;
-  font-size: 13px;
+  border-radius: 7px;
+  padding: 2px 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   color: #e8e8f2;
@@ -92,54 +103,85 @@
 .cond-engine-video .cond-engine-head { border-color: #3f7fd8; color: #bcd6ff; }
 
 /* audio channels */
-.cond-achans { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.cond-achans {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  grid-auto-rows: min-content;
+  gap: 6px;
+  padding-right: 3px;
+}
 .cond-achan {
   background: #10101a;
   border: 1px solid #1c1c2b;
   border-left: 3px solid #8a8a9a;
-  border-radius: 9px;
-  padding: 9px 11px;
+  border-radius: 8px;
+  padding: 5px 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
-.cond-achan-head b { color: #e8e8f2; font-weight: 500; letter-spacing: 0.08em; }
+.cond-achan-head { display: flex; align-items: baseline; gap: 7px; }
+.cond-achan-head b { color: #e8e8f2; font-weight: 500; font-size: 12px; letter-spacing: 0.06em; }
+.cond-achan-head .cond-sensor-sub { display: inline; margin: 0; }
 
 /* sample library block inside the audio engine */
-.cond-lib { border-top: 1px solid #1c1c2b; padding-top: 10px; }
-.cond-lib-head { font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: #71718a; margin-bottom: 8px; }
+.cond-lib { flex: 0 0 auto; border-top: 1px solid #1c1c2b; padding-top: 6px; }
+.cond-lib-head { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #71718a; margin-bottom: 5px; }
+.cond-lib .cond-samples { margin-top: 5px; max-height: 84px; }
 
 /* feather engine: selection + split (parts | video output) */
-.cond-feather-select { border-bottom: 1px solid #1c1c2b; padding-bottom: 10px; }
+.cond-feather-select { flex: 0 0 auto; border-bottom: 1px solid #1c1c2b; padding-bottom: 6px; }
+.cond-feather-select .cond-feathers {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  padding-bottom: 3px;
+}
+.cond-feather-select .cond-feather { flex: 0 0 auto; width: 30px; height: 40px; }
+.cond-feather-select .cond-feather-name { margin-top: 3px; font-size: 9px; }
+
 .cond-video-split {
+  flex: 1 1 auto;
+  min-height: 0;
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) minmax(240px, 1.1fr);
-  gap: 12px;
-  align-items: start;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1.05fr);
+  gap: 9px;
+  align-items: stretch;
 }
 @media (max-width: 720px) {
   .cond-video-split { grid-template-columns: 1fr; }
 }
-.cond-vparts { display: flex; flex-direction: column; gap: 10px; }
+.cond-vparts {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 3px;
+}
 .cond-vpart {
   background: #10101a;
   border: 1px solid #1c1c2b;
   border-left: 3px solid #5b9bff;
-  border-radius: 9px;
-  padding: 9px 11px;
+  border-radius: 8px;
+  padding: 5px 8px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 .cond-vpart-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.cond-vpart-head b { color: #e8e8f2; font-weight: 500; letter-spacing: 0.08em; }
+.cond-vpart-head b { color: #e8e8f2; font-weight: 500; font-size: 12px; letter-spacing: 0.06em; }
+.cond-vpart-head .cond-sensor-sub { display: inline; margin: 0 0 0 6px; }
 .cond-pulse {
   border: 1px solid #2f7d4a;
   background: #163a24;
   color: #6fe39a;
   border-radius: 20px;
-  padding: 4px 12px;
-  font-size: 11px;
+  padding: 2px 9px;
+  font-size: 10px;
   letter-spacing: 0.06em;
   cursor: pointer;
   white-space: nowrap;
@@ -147,36 +189,40 @@
 .cond-pulse:hover { background: #1d5232; border-color: #3fae66; }
 .cond-pulse:active { background: #4ade80; color: #06210f; border-color: #4ade80; }
 
-/* inline video output */
+/* inline video output — fills the panel height, never scrolls away */
 .cond-video-out {
-  position: sticky;
-  top: 16px;
+  min-height: 0;
+  height: 100%;
   background: #050508;
   border: 1px solid #1c1c2b;
-  border-radius: 9px;
+  border-radius: 8px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 .cond-video-out-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 7px 10px;
-  font-size: 11px;
+  padding: 4px 8px;
+  font-size: 9px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: #71718a;
   border-bottom: 1px solid #1c1c2b;
 }
-.cond-video-out-canvas { position: relative; aspect-ratio: 3 / 4; min-height: 360px; background: #050508; }
+.cond-video-out-canvas { position: relative; flex: 1 1 auto; min-height: 0; background: #050508; }
 
-/* bottom: global reaction + presets */
+/* bottom: global reaction + presets — fixed height, scrolls internally */
 .cond-bottom {
+  flex: 0 0 auto;
+  max-height: 27vh;
+  overflow-y: auto;
   display: grid;
-  grid-template-columns: 1fr 320px;
-  gap: 16px;
-  padding: 0 16px 16px;
+  grid-template-columns: 1fr 290px;
+  gap: 12px;
+  padding: 0 12px 10px;
   align-items: start;
 }
 @media (max-width: 900px) {
@@ -187,8 +233,8 @@
   background: #0d0d15;
   border: 1px solid #1c1c29;
   border-radius: 10px;
-  padding: 12px;
-  margin-bottom: 14px;
+  padding: 8px 10px;
+  margin-bottom: 0;
 }
 .cond-sec h3 {
   margin: 0 0 10px;
@@ -315,7 +361,7 @@
 .cond-mod-video .cond-mod-label { color: #7fb0ff; }
 
 /* live audio meters — input level (pre-EQ) + filtered level (post-EQ) */
-.cond-meter { display: grid; grid-template-columns: 74px 1fr 40px; align-items: center; gap: 8px; }
+.cond-meter { display: grid; grid-template-columns: 62px 1fr 34px; align-items: center; gap: 6px; }
 .cond-meter-label { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #6a6a80; }
 .cond-meter-bar { height: 7px; border-radius: 4px; background: #14141f; border: 1px solid #26263a; overflow: hidden; }
 .cond-meter-fill { height: 100%; width: 0%; border-radius: 4px; transition: width 60ms linear; }
@@ -408,7 +454,7 @@
 .cond-eq-meter-label { font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: #55556a; }
 .cond-eq-meter-val { font-size: 10px; color: #9ecbff; font-variant-numeric: tabular-nums; }
 
-.cond-slider { display: grid; grid-template-columns: 74px 1fr 52px; align-items: center; gap: 8px; }
+.cond-slider { display: grid; grid-template-columns: 62px 1fr 42px; align-items: center; gap: 6px; }
 .cond-slider-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #71718a; }
 .cond-slider-val { font-size: 11px; color: #9ecbff; text-align: right; font-variant-numeric: tabular-nums; }
 .cond-slider input[type='range'] {
@@ -434,11 +480,11 @@
 
 .cond-global {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 10px 24px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 4px 18px;
   align-items: center;
 }
-.cond-scene { max-width: 280px; }
+.cond-scene { max-width: 240px; }
 
 /* live preview — floating, so you can hear + see a config before pushing it */
 .cond-preview {

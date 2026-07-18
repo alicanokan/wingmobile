@@ -986,7 +986,16 @@ function ImageFeather({
       // Share ONE input gain with the motion path (App.tsx applies the same
       // sensitivity to holdWind), so Sensitivity scales the audio-reactive glow
       // and the EQ band together instead of them drifting as independent gains.
-      audioCh[i] = Math.min(1, rawBand * (sr?.sensitivity ?? 1));
+      //
+      // GATED BY ACTIVATION: a loop that is merely playing must NOT light up its
+      // layer — the sound is only "let through" while the sensor is actually
+      // active. Gate on the ENVELOPE ENERGY (attack/release shaped), NOT on the
+      // pump: the pump stays inflated for the whole floatTime window after a
+      // release, which would leave the audio reaction effectively ungated.
+      // autoAudio deliberately bypasses the gate — that mode exists precisely to
+      // let loops drive their layers with no trigger.
+      const act = g.autoAudio ? 1 : Math.min(1, E[i]);
+      audioCh[i] = Math.min(1, rawBand * (sr?.sensitivity ?? 1) * act);
       // AUTO-AUDIO: loops play on their own and DRIVE their layer (charge / colour /
       // motion) without any sensor trigger — each loop animates a different layer.
       if (g.autoAudio && audio.hasLoop(sid)) {
