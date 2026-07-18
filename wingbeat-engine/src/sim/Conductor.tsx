@@ -91,20 +91,25 @@ export default function Conductor() {
   const player = useRef<HTMLAudioElement | null>(null);
   const skipFirstLivePush = useRef(true);
 
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('wb.conductorTheme') === 'light' ? 'light' : 'dark'));
+  useEffect(() => localStorage.setItem('wb.conductorTheme', theme), [theme]);
+
   // ---- live preview (own engine, so you can hear + see a config before pushing it) ---
   const previewEngine = useMemo(() => new WingbeatEngine(), []);
   const previewAudio = useMemo(() => new AudioEngine(), []);
   const previewSim = useMemo(() => new SimTransport(), []);
   const [previewAudioOn, setPreviewAudioOn] = useState(false);
-  const [testingSensor, setTestingSensor] = useState<string | null>(null);
+  const [testingSensors, setTestingSensors] = useState<Set<string>>(new Set());
   const loadedSample = useRef<Record<string, string>>({}); // sensorId → sample id currently loaded in the preview
+  const heldTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({}); // safety auto-stop per sensor
 
   useEffect(() => {
     previewSim.connect(previewEngine);
     previewSim.setPresence('feather_01', true); // keep the preview shape visible
-    const detachAudio = previewAudio.attach(previewEngine);
-    const offReady = previewEngine.on('audioReady', () => setPreviewAudioOn(true));
-    // loop volume tracks each sensor's live activation, same as the console.
+    // Loop volume tracks each sensor's live activation, same as the console.
+    // (Deliberately NOT calling previewAudio.attach(previewEngine) here — that
+    // wires the ambient drone/wind-noise/bell synth voices, which would hum
+    // continuously in this small preview. Only the assigned loop samples play.)
     const offNode = previewEngine.on('node', (e: { id: string; state: { wind: number; present: boolean } }) => {
       if (!e.id.startsWith('sensor_') || !previewAudio.hasLoop(e.id)) return;
       const lvl = Math.max(e.state.wind, e.state.present ? 0.9 : 0);
@@ -112,8 +117,8 @@ export default function Conductor() {
     });
     return () => {
       offNode();
-      offReady();
-      detachAudio();
+      Object.values(heldTimers.current).forEach(clearTimeout);
+      heldTimers.current = {};
       previewSim.disconnect();
     };
   }, [previewEngine, previewAudio, previewSim]);
@@ -123,13 +128,32 @@ export default function Conductor() {
     loadIntoRig(cfg.preset);
   }, [cfg]);
 
-  /** Fire one sensor on the preview: loads its assigned sample if needed, then
-   *  a brief hold + release so you both hear the loop and see the particle reaction. */
-  const testSensor = async (sensorId: string) => {
-    setTestingSensor(sensorId);
+  /** Stop a sensor's test — releases wind/presence so the shader's own Release
+   *  setting plays out the natural decay (motion AND audio-reactive color). */
+  const stopSensorTest = useCallback((sensorId: string) => {
+    previewSim.releaseWind(sensorId);
+    previewSim.setPresence(sensorId, false);
+    if (heldTimers.current[sensorId]) {
+      clearTimeout(heldTimers.current[sensorId]);
+      delete heldTimers.current[sensorId];
+    }
+    setTestingSensors((s) => {
+      if (!s.has(sensorId)) return s;
+      const n = new Set(s);
+      n.delete(sensorId);
+      return n;
+    });
+  }, [previewSim]);
+
+  /** Start a sensor's test — loads its assigned sample if needed, then HOLDS it
+   *  (like a held key) until stopSensorTest is called, so Attack/Release and the
+   *  sample's own length are fully audible/visible instead of a fixed blip. Auto-
+   *  stops after 20s as a safety net against a forgotten drone. */
+  const startSensorTest = async (sensorId: string) => {
     try {
       if (!previewAudio.ready) await previewAudio.init();
       await previewAudio.resume();
+      setPreviewAudioOn(true);
       const ref = cfg.sensorSamples[sensorId] ?? null;
       if (ref) {
         if (loadedSample.current[sensorId] !== ref.id) {
@@ -143,20 +167,24 @@ export default function Conductor() {
       }
       previewSim.setPresence(sensorId, true);
       previewSim.holdWind(sensorId, 1);
-      setTimeout(() => {
-        previewSim.releaseWind(sensorId);
-        previewSim.setPresence(sensorId, false);
-      }, 700);
+      setTestingSensors((s) => new Set(s).add(sensorId));
+      heldTimers.current[sensorId] = setTimeout(() => stopSensorTest(sensorId), 20000);
     } catch (e) {
       setStatus(String(e));
-    } finally {
-      setTimeout(() => setTestingSensor((t) => (t === sensorId ? null : t)), 750);
     }
   };
 
-  /** Sweep all 5 sensors in a quick staggered sequence — one button to preview the whole feather. */
-  const testAll = () => {
-    SENSOR_CHANNELS.forEach((c, i) => setTimeout(() => void testSensor(c.sensor), i * 220));
+  const toggleSensorTest = (sensorId: string) => {
+    if (testingSensors.has(sensorId)) stopSensorTest(sensorId);
+    else void startSensorTest(sensorId);
+  };
+
+  /** Test-all toggle: stagger the starts a touch so the sweep reads left-to-right,
+   *  then hold everything until Stop is pressed. */
+  const anyTesting = testingSensors.size > 0;
+  const toggleTestAll = () => {
+    if (anyTesting) SENSOR_CHANNELS.forEach((c) => stopSensorTest(c.sensor));
+    else SENSOR_CHANNELS.forEach((c, i) => setTimeout(() => void startSensorTest(c.sensor), i * 150));
   };
 
   const featherPresets = useMemo(() => presets.filter((p) => p.feather === feather), [presets, feather]);
@@ -312,7 +340,7 @@ export default function Conductor() {
   const g = cfg.preset.global;
 
   return (
-    <div className="cond-shell">
+    <div className={`cond-shell ${theme === 'light' ? 'cond-light' : ''}`}>
       <header className="cond-head">
         <div className="cond-title">
           Wing Beat <b>· Conductor</b>
@@ -320,8 +348,11 @@ export default function Conductor() {
         </div>
         <div className="cond-head-actions">
           {liveInfo && <span className="cond-liveinfo">{liveInfo}</span>}
-          <button className="wb-btn" onClick={testAll} title="Play all 5 sensors in sequence on the preview below — nothing is pushed live">
-            ▶ Test all
+          <button className="wb-btn" onClick={() => setTheme((t) => (t === 'light' ? 'dark' : 'light'))} title="Toggle light/dark theme">
+            {theme === 'light' ? '☀ Light' : '☾ Dark'}
+          </button>
+          <button className={`wb-btn ${anyTesting ? 'active' : ''}`} onClick={toggleTestAll} title="Hold all 5 sensors on the preview below — nothing is pushed live">
+            {anyTesting ? '■ Stop' : '▶ Test all'}
           </button>
           <label className={`wb-btn cond-livemode ${liveMode ? 'active' : ''}`}>
             <input type="checkbox" checked={liveMode} onChange={(e) => setLiveMode(e.target.checked)} />
@@ -416,12 +447,11 @@ export default function Conductor() {
                         </select>
                       </label>
                       <button
-                        className="wb-btn"
-                        disabled={testingSensor === c.sensor}
-                        onClick={() => void testSensor(c.sensor)}
-                        title="Play this sensor on the preview below — nothing is pushed live"
+                        className={`wb-btn ${testingSensors.has(c.sensor) ? 'active' : ''}`}
+                        onClick={() => toggleSensorTest(c.sensor)}
+                        title="Hold this sensor on the preview below — nothing is pushed live"
                       >
-                        {testingSensor === c.sensor ? '● …' : '▶ Test'}
+                        {testingSensors.has(c.sensor) ? '■ Stop' : '▶ Test'}
                       </button>
                     </div>
 
