@@ -135,17 +135,24 @@ export default function Conductor() {
   }, [cfg]);
 
   /** Stop a sensor's test — releases wind/presence so the shader's own Release
-   *  setting plays out the natural decay (motion AND audio-reactive color). */
+   *  setting plays out the natural decay (motion AND audio-reactive color), AND
+   *  fully stops the loop. A loop's meter/FFT tap its RAW output (before the
+   *  gain node) so a layer can react to sound before its gain is up — but that
+   *  also means fading gain to 0 on Stop never actually reads as silence, so
+   *  the audio-reactive glow kept going even with no audio audible. Stopped now
+   *  means stopped: clearLoop so there's truly nothing left to react to. */
   const stopSensorTest = useCallback((sensorId: string) => {
     previewSim.releaseWind(sensorId);
     previewSim.setPresence(sensorId, false);
+    previewAudio.clearLoop(sensorId);
+    delete loadedSample.current[sensorId];
     setTestingSensors((s) => {
       if (!s.has(sensorId)) return s;
       const n = new Set(s);
       n.delete(sensorId);
       return n;
     });
-  }, [previewSim]);
+  }, [previewSim, previewAudio]);
 
   /** Start a sensor's test — loads its assigned sample if needed, then HOLDS it
    *  (like a held key) until stopSensorTest is called, so Attack/Release and the
