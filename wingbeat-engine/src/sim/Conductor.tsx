@@ -77,6 +77,45 @@ function Slider({
   );
 }
 
+/** Live audio meter — polls the preview engine each frame (imperative, no
+ *  per-frame React render). `mode: 'input'` shows the sample's raw level
+ *  (pre-EQ); `mode: 'filtered'` shows the post-EQ band level (or the full
+ *  level when EQ is bypassed). Reads 0 while the sensor isn't under Test. */
+function LiveMeter({
+  audio, sensorId, mode, band, range, eqOn, active, label,
+}: {
+  audio: AudioEngine; sensorId: string; mode: 'input' | 'filtered';
+  band: SensorRig['audioBand']; range?: [number, number]; eqOn: boolean;
+  active: boolean; label: string;
+}) {
+  const fillRef = useRef<HTMLDivElement | null>(null);
+  const valRef = useRef<HTMLSpanElement | null>(null);
+  const rafRef = useRef(0);
+  useEffect(() => {
+    const tick = () => {
+      let v = 0;
+      if (active && audio.ready) {
+        if (mode === 'input') v = audio.getLoopLevel(sensorId);
+        else if (!eqOn) v = audio.getLoopLevel(sensorId);
+        else if (band === 'custom' && range) v = audio.getLoopBandRange(sensorId, range[0], range[1]);
+        else v = audio.getLoopBand(sensorId, band === 'custom' ? 'full' : band);
+      }
+      if (fillRef.current) fillRef.current.style.width = `${Math.round(Math.min(1, v) * 100)}%`;
+      if (valRef.current) valRef.current.textContent = v.toFixed(2);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [audio, sensorId, mode, band, range, eqOn, active]);
+  return (
+    <div className={`cond-meter cond-meter-${mode}`}>
+      <span className="cond-meter-label">{label}</span>
+      <div className="cond-meter-bar"><div ref={fillRef} className="cond-meter-fill" /></div>
+      <span ref={valRef} className="cond-meter-val">0.00</span>
+    </div>
+  );
+}
+
 export default function Conductor() {
   const [samples, setSamples] = useState<CloudSample[]>([]);
   const [presets, setPresets] = useState<CloudPreset[]>([]);
@@ -120,8 +159,11 @@ export default function Conductor() {
     // continuously in this small preview. Only the assigned loop samples play.)
     const offNode = previewEngine.on('node', (e: { id: string; state: { wind: number; present: boolean } }) => {
       if (!e.id.startsWith('sensor_') || !previewAudio.hasLoop(e.id)) return;
-      const lvl = Math.max(e.state.wind, e.state.present ? 0.9 : 0);
-      previewAudio.setLoopGain(e.id, lvl > 0.12 ? Math.min(1.2, 0.25 + lvl) : 0);
+      // The sensor's OUTPUT (its sensitivity-scaled wind) masters the audible
+      // volume, so turning Sensitivity down makes the loop quieter — matching
+      // the signal-flow (sensor output → volume level amount → mixer).
+      const out = e.state.wind;
+      previewAudio.setLoopGain(e.id, out > 0.03 ? Math.min(1.2, 0.15 + out) : 0);
     });
     return () => {
       offNode();
@@ -133,6 +175,17 @@ export default function Conductor() {
   useEffect(() => {
     loadIntoRig(cfg.preset);
   }, [cfg]);
+
+  // While a sensor is under Test, keep its injected level tied to its LIVE
+  // Sensitivity so dragging the slider visibly changes the motion + volume in
+  // the preview (previously Test held a fixed full signal, so Sensitivity did
+  // nothing on this page).
+  useEffect(() => {
+    testingSensors.forEach((sid) => {
+      const sens = cfg.preset.sensors[sid]?.sensitivity ?? 1;
+      previewSim.holdWind(sid, Math.min(1, sens));
+    });
+  }, [cfg, testingSensors, previewSim]);
 
   /** Stop a sensor's test — releases wind/presence so the shader's own Release
    *  setting plays out the natural decay (motion AND audio-reactive color), AND
@@ -177,8 +230,12 @@ export default function Conductor() {
         previewAudio.clearLoop(sensorId);
         delete loadedSample.current[sensorId];
       }
+      // Inject a full breath SCALED by this sensor's sensitivity, so the test
+      // reflects the same input gain the real installation applies. The live
+      // effect below keeps it in sync while you drag the Sensitivity slider.
+      const sens = cfg.preset.sensors[sensorId]?.sensitivity ?? 1;
       previewSim.setPresence(sensorId, true);
-      previewSim.holdWind(sensorId, 1);
+      previewSim.holdWind(sensorId, Math.min(1, sens));
       setTestingSensors((s) => new Set(s).add(sensorId));
     } catch (e) {
       setStatus(String(e));
@@ -434,7 +491,7 @@ export default function Conductor() {
         {/* RIGHT — per-sensor rigs + global reaction */}
         <main className="cond-main">
           <section className="cond-sec">
-            <h3>Sensors — sample · effect · sensitivity</h3>
+            <h3>Sensors — audio · sensor control · video</h3>
             <div className="cond-sensors">
               {SENSOR_CHANNELS.map((c) => {
                 const s = cfg.preset.sensors[c.sensor];
@@ -447,93 +504,118 @@ export default function Conductor() {
                       <span className="cond-sensor-sub">{c.sensor} · key {c.key.toUpperCase()} · {c.kind}</span>
                     </div>
 
-                    <div className="cond-field-row">
-                      <label className="cond-field">
-                        <span>Sample</span>
-                        <select value={assigned?.id ?? ''} onChange={(e) => assignSample(c.sensor, e.target.value)}>
-                          <option value="">— none —</option>
-                          {samples.map((smp) => (
-                            <option key={smp.id} value={smp.id}>{smp.name}</option>
-                          ))}
+                    {(() => {
+                      const eqOn = s.eqOn !== false;
+                      const testing = testingSensors.has(c.sensor);
+                      return (
+                    <>
+                    {/* ── AUDIO ── sample → level → EQ → filtered level */}
+                    <div className="cond-mod cond-mod-audio">
+                      <div className="cond-mod-label">Audio</div>
+                      <div className="cond-field-row">
+                        <label className="cond-field">
+                          <span>Sample</span>
+                          <select value={assigned?.id ?? ''} onChange={(e) => assignSample(c.sensor, e.target.value)}>
+                            <option value="">— none —</option>
+                            {samples.map((smp) => (
+                              <option key={smp.id} value={smp.id}>{smp.name}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <button
+                          className={`wb-btn ${testing ? 'active' : ''}`}
+                          onClick={() => toggleSensorTest(c.sensor)}
+                          title="Hold this sensor on the preview below — nothing is pushed live"
+                        >
+                          {testing ? '■ Stop' : '▶ Test'}
+                        </button>
+                      </div>
+
+                      <LiveMeter audio={previewAudio} sensorId={c.sensor} mode="input" band={s.audioBand} range={s.audioBandRange} eqOn={eqOn} active={testing} label="Input level" />
+
+                      <div className="cond-eq-controls">
+                        <button
+                          className={`cond-eq-power ${eqOn ? 'on' : ''}`}
+                          onClick={() => patchSensor(c.sensor, (x) => { x.eqOn = !eqOn; })}
+                          title="EQ on/off — off reacts to the full-range level"
+                        >
+                          EQ {eqOn ? 'ON' : 'OFF'}
+                        </button>
+                        <select className="cond-eq-band" disabled={!eqOn} value={s.audioBand} onChange={(e) => patchSensor(c.sensor, (x) => { x.audioBand = e.target.value as SensorRig['audioBand']; })}>
+                          {AUDIO_BANDS.map((b) => <option key={b} value={b}>{AUDIO_BAND_LABELS[b]}</option>)}
                         </select>
-                      </label>
-                      <button
-                        className={`wb-btn ${testingSensors.has(c.sensor) ? 'active' : ''}`}
-                        onClick={() => toggleSensorTest(c.sensor)}
-                        title="Hold this sensor on the preview below — nothing is pushed live"
-                      >
-                        {testingSensors.has(c.sensor) ? '■ Stop' : '▶ Test'}
-                      </button>
+                        <button
+                          className={`wb-btn ${eqOpen.has(c.sensor) ? 'active' : ''}`}
+                          style={{ padding: '5px 8px' }}
+                          disabled={!eqOn}
+                          onClick={() => toggleEq(c.sensor)}
+                          title="Visual EQ — see the loop's spectrum and set a custom frequency range"
+                        >
+                          ≈ EQ
+                        </button>
+                      </div>
+
+                      {eqOn && eqOpen.has(c.sensor) && (
+                        <EqEditor
+                          audio={previewAudio}
+                          sensorId={c.sensor}
+                          band={s.audioBand}
+                          range={s.audioBandRange}
+                          eqOn={eqOn}
+                          onChange={(band, range) => patchSensor(c.sensor, (x) => { x.audioBand = band; x.audioBandRange = range; })}
+                        />
+                      )}
+
+                      <LiveMeter audio={previewAudio} sensorId={c.sensor} mode="filtered" band={s.audioBand} range={s.audioBandRange} eqOn={eqOn} active={testing} label={eqOn ? 'Filtered' : 'Full (EQ off)'} />
                     </div>
 
-                    <Slider label="Sensitivity" value={s.sensitivity ?? 1} min={0.2} max={3} step={0.05} onChange={(v) => patchSensor(c.sensor, (x) => { x.sensitivity = v; })} fmt={(v) => `${v.toFixed(2)}×`} />
+                    {/* ── SENSOR INPUT CONTROL ── masters both audio volume + video movement */}
+                    <div className="cond-mod cond-mod-sensor">
+                      <div className="cond-mod-label">Sensor input control</div>
+                      <Slider label="Sensitivity" value={s.sensitivity ?? 1} min={0.2} max={3} step={0.05} onChange={(v) => patchSensor(c.sensor, (x) => { x.sensitivity = v; })} fmt={(v) => `${v.toFixed(2)}×`} />
+                      <Slider label="Attack" value={s.attack} min={0.03} max={0.6} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.attack = v; x.modules.release = true; })} />
+                      <Slider label="Release" value={s.release} min={0.02} max={0.4} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.release = v; x.modules.release = true; })} />
+                      <Slider label="Reach" value={s.reach} min={0} max={1} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.reach = v; })} />
+                    </div>
 
-                    <div className="cond-field-row">
+                    {/* ── VIDEO ── which layers move, how, and colour */}
+                    <div className="cond-mod cond-mod-video">
+                      <div className="cond-mod-label">Video</div>
                       <label className="cond-field">
                         <span>Motion</span>
                         <select value={s.motionType} onChange={(e) => patchSensor(c.sensor, (x) => { x.motionType = e.target.value as SensorRig['motionType']; })}>
                           {MOTION_TYPES.map((m) => <option key={m} value={m}>{MOTION_LABELS[m]}</option>)}
                         </select>
                       </label>
-                      <label className="cond-field">
-                        <span>EQ band</span>
-                        <div className="cond-field-row" style={{ gap: 6 }}>
-                          <select style={{ flex: 1 }} value={s.audioBand} onChange={(e) => patchSensor(c.sensor, (x) => { x.audioBand = e.target.value as SensorRig['audioBand']; })}>
-                            {AUDIO_BANDS.map((b) => <option key={b} value={b}>{AUDIO_BAND_LABELS[b]}</option>)}
-                          </select>
-                          <button
-                            className={`wb-btn ${eqOpen.has(c.sensor) ? 'active' : ''}`}
-                            style={{ padding: '5px 8px' }}
-                            onClick={() => toggleEq(c.sensor)}
-                            title="Visual EQ — see the loop's spectrum and set a custom frequency range"
-                          >
-                            ≈ EQ
-                          </button>
+                      <div className="cond-field">
+                        <span>Affects layers</span>
+                        <div className="cond-layers">
+                          {Array.from({ length: MAX_LAYERS }, (_, li) => (
+                            <button
+                              key={li}
+                              className={`cond-layer ${s.layers.includes(li) ? 'on' : ''}`}
+                              onClick={() => patchSensor(c.sensor, (x) => { x.layers = x.layers.includes(li) ? x.layers.filter((n) => n !== li) : [...x.layers, li]; })}
+                            >
+                              L{li + 1}
+                            </button>
+                          ))}
                         </div>
-                      </label>
-                    </div>
-
-                    {eqOpen.has(c.sensor) && (
-                      <EqEditor
-                        audio={previewAudio}
-                        sensorId={c.sensor}
-                        band={s.audioBand}
-                        range={s.audioBandRange}
-                        sensitivity={s.sensitivity ?? 1}
-                        onChange={(band, range) => patchSensor(c.sensor, (x) => { x.audioBand = band; x.audioBandRange = range; })}
-                      />
-                    )}
-
-                    <div className="cond-field">
-                      <span>Affects layers</span>
-                      <div className="cond-layers">
-                        {Array.from({ length: MAX_LAYERS }, (_, li) => (
-                          <button
-                            key={li}
-                            className={`cond-layer ${s.layers.includes(li) ? 'on' : ''}`}
-                            onClick={() => patchSensor(c.sensor, (x) => { x.layers = x.layers.includes(li) ? x.layers.filter((n) => n !== li) : [...x.layers, li]; })}
-                          >
-                            L{li + 1}
-                          </button>
-                        ))}
+                      </div>
+                      <div className="cond-field-row">
+                        <label className="cond-check">
+                          <input type="checkbox" checked={s.modules.movement} onChange={(e) => patchSensor(c.sensor, (x) => { x.modules.movement = e.target.checked; })} />
+                          moves particles
+                        </label>
+                        <label className="cond-check">
+                          <input type="checkbox" checked={s.modules.color} onChange={(e) => patchSensor(c.sensor, (x) => { x.modules.color = e.target.checked; })} />
+                          recolor
+                          <input type="color" value={rgbToHex(s.overrideRGB)} onChange={(e) => patchSensor(c.sensor, (x) => { x.overrideRGB = hexToRgb(e.target.value); })} />
+                        </label>
                       </div>
                     </div>
-
-                    <Slider label="Reach" value={s.reach} min={0} max={1} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.reach = v; })} />
-                    <Slider label="Attack" value={s.attack} min={0.03} max={0.6} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.attack = v; x.modules.release = true; })} />
-                    <Slider label="Release" value={s.release} min={0.02} max={0.4} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.release = v; x.modules.release = true; })} />
-
-                    <div className="cond-field-row">
-                      <label className="cond-check">
-                        <input type="checkbox" checked={s.modules.movement} onChange={(e) => patchSensor(c.sensor, (x) => { x.modules.movement = e.target.checked; })} />
-                        moves particles
-                      </label>
-                      <label className="cond-check">
-                        <input type="checkbox" checked={s.modules.color} onChange={(e) => patchSensor(c.sensor, (x) => { x.modules.color = e.target.checked; })} />
-                        recolor
-                        <input type="color" value={rgbToHex(s.overrideRGB)} onChange={(e) => patchSensor(c.sensor, (x) => { x.overrideRGB = hexToRgb(e.target.value); })} />
-                      </label>
-                    </div>
+                    </>
+                      );
+                    })()}
                   </div>
                 );
               })}

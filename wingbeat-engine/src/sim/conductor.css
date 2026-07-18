@@ -157,6 +157,66 @@
 .cond-sensor-head b { color: #e8e8f2; font-weight: 500; letter-spacing: 0.08em; }
 .cond-sensor-sub { display: block; color: #55556a; font-size: 10px; letter-spacing: 0.06em; margin-top: 1px; }
 
+/* the three signal-flow modules: audio (grey) · sensor control (gold) · video (blue) */
+.cond-mod {
+  border: 1px solid #1c1c2b;
+  border-left: 3px solid #3a3a4a;
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #0d0d16;
+}
+.cond-mod-label {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #6a6a80;
+  font-weight: 600;
+}
+.cond-mod-audio { border-left-color: #8a8a9a; }
+.cond-mod-audio .cond-mod-label { color: #9a9ab0; }
+.cond-mod-sensor { border-left-color: #e8c56a; }
+.cond-mod-sensor .cond-mod-label { color: #e8c56a; }
+.cond-mod-video { border-left-color: #5b9bff; }
+.cond-mod-video .cond-mod-label { color: #7fb0ff; }
+
+/* live audio meters — input level (pre-EQ) + filtered level (post-EQ) */
+.cond-meter { display: grid; grid-template-columns: 74px 1fr 40px; align-items: center; gap: 8px; }
+.cond-meter-label { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #6a6a80; }
+.cond-meter-bar { height: 7px; border-radius: 4px; background: #14141f; border: 1px solid #26263a; overflow: hidden; }
+.cond-meter-fill { height: 100%; width: 0%; border-radius: 4px; transition: width 60ms linear; }
+.cond-meter-input .cond-meter-fill { background: linear-gradient(90deg, #6a6a80, #b8b8c8); }
+.cond-meter-filtered .cond-meter-fill { background: linear-gradient(90deg, #3f7fd8, #9ecbff); }
+.cond-meter-val { font-size: 10px; color: #9ecbff; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* EQ control row: on/off power · band select · visual-editor toggle */
+.cond-eq-controls { display: flex; align-items: center; gap: 6px; }
+.cond-eq-power {
+  border: 1px solid #26263a;
+  background: #14141f;
+  color: #71718a;
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.cond-eq-power.on { color: #0a0a10; background: #9ecbff; border-color: #9ecbff; }
+.cond-eq-band {
+  flex: 1;
+  min-width: 0;
+  background: #14141f;
+  color: #cfcfda;
+  border: 1px solid #26263a;
+  border-radius: 6px;
+  padding: 5px 6px;
+  font-size: 12px;
+}
+.cond-eq-band:disabled { opacity: 0.4; }
+
 .cond-field { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .cond-field > span { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: #71718a; }
 .cond-field select {
@@ -368,3 +428,17 @@
 .cond-light .cond-eq-range span:last-child { color: #8a5f00; }
 .cond-light .cond-eq-meter-label { color: #9a9aa2; }
 .cond-light .cond-eq-meter-val { color: #2266aa; }
+.cond-light .cond-mod { background: #fbfaf6; border-color: #e2e0d8; border-left-color: #cfcdc4; }
+.cond-light .cond-mod-label { color: #8a8a92; }
+.cond-light .cond-mod-audio { border-left-color: #a8a8b2; }
+.cond-light .cond-mod-audio .cond-mod-label { color: #75758a; }
+.cond-light .cond-mod-sensor { border-left-color: #b8860b; }
+.cond-light .cond-mod-sensor .cond-mod-label { color: #8a5f00; }
+.cond-light .cond-mod-video { border-left-color: #3f7fd8; }
+.cond-light .cond-mod-video .cond-mod-label { color: #2266aa; }
+.cond-light .cond-meter-label { color: #8a8a92; }
+.cond-light .cond-meter-bar { background: #eceae2; border-color: #d8d6cc; }
+.cond-light .cond-meter-val { color: #2266aa; }
+.cond-light .cond-eq-power { background: #fff; border-color: #d8d6cc; color: #75758a; }
+.cond-light .cond-eq-power.on { color: #fff; background: #3f7fd8; border-color: #3f7fd8; }
+.cond-light .cond-eq-band { background: #fff; color: #2a2a32; border-color: #d8d6cc; }

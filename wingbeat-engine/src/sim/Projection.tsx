@@ -975,10 +975,14 @@ function ImageFeather({
       // each layer reacts to ITS OWN loop, on the EQ band it's routed to
       const sid = SENSOR_CHANNELS[i].sensor;
       const sr = rig.sensors[sid];
+      // EQ off → the layer reacts to the FULL loop level (no band filtering).
+      const eqOn = sr?.eqOn !== false;
       const band = sr?.audioBand ?? 'full';
-      const rawBand = band === 'custom' && sr?.audioBandRange
-        ? audio.getLoopBandRange(sid, sr.audioBandRange[0], sr.audioBandRange[1])
-        : audio.getLoopBand(sid, band === 'custom' ? 'full' : band);
+      const rawBand = !eqOn
+        ? audio.getLoopLevel(sid)
+        : band === 'custom' && sr?.audioBandRange
+          ? audio.getLoopBandRange(sid, sr.audioBandRange[0], sr.audioBandRange[1])
+          : audio.getLoopBand(sid, band === 'custom' ? 'full' : band);
       // Share ONE input gain with the motion path (App.tsx applies the same
       // sensitivity to holdWind), so Sensitivity scales the audio-reactive glow
       // and the EQ band together instead of them drifting as independent gains.

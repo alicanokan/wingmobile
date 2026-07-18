@@ -71,6 +71,7 @@ export interface SensorRig {
   motionType: MotionType; // movement shape (swirl / rise / scatter / wave / …)
   audioBand: AudioBand; // which EQ band of this sensor's loop drives its reactivity
   audioBandRange?: [number, number]; // Hz [min,max] — used when audioBand === 'custom'
+  eqOn?: boolean; // false = bypass the EQ band; reactivity reads the full loop level (default true)
   reach: number;
   swirl: number;
   lift: number;
@@ -206,6 +207,7 @@ export function defaultSensorRig(sensorId: string): SensorRig {
     modules: { movement: true, monitor: true, release: false, color: false },
     motionType: 'swirl',
     audioBand: 'full',
+    eqOn: true,
     reach: 0.5,
     swirl: 0.6,
     lift: 0.6,
