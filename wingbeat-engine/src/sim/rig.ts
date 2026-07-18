@@ -37,10 +37,12 @@ export const MOTION_CODE: Record<MotionType, number> = {
 };
 
 // Which EQ band of a sensor's loop drives its layer's audio-reactivity.
-export type AudioBand = 'full' | 'low' | 'mid' | 'high';
-export const AUDIO_BANDS: AudioBand[] = ['full', 'low', 'mid', 'high'];
+// 'custom' uses audioBandRange (Hz) instead of a fixed third — set visually
+// in the Conductor's EQ editor.
+export type AudioBand = 'full' | 'low' | 'mid' | 'high' | 'custom';
+export const AUDIO_BANDS: AudioBand[] = ['full', 'low', 'mid', 'high', 'custom'];
 export const AUDIO_BAND_LABELS: Record<AudioBand, string> = {
-  full: 'Full', low: 'Bass', mid: 'Mid', high: 'Treble',
+  full: 'Full', low: 'Bass', mid: 'Mid', high: 'Treble', custom: 'Custom',
 };
 
 export type LayerKind = 'auto' | 'color' | 'area';
@@ -68,6 +70,7 @@ export interface SensorRig {
   modules: Record<ModuleType, boolean>;
   motionType: MotionType; // movement shape (swirl / rise / scatter / wave / …)
   audioBand: AudioBand; // which EQ band of this sensor's loop drives its reactivity
+  audioBandRange?: [number, number]; // Hz [min,max] — used when audioBand === 'custom'
   reach: number;
   swirl: number;
   lift: number;

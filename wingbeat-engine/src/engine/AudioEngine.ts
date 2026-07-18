@@ -354,7 +354,7 @@ export class AudioEngine {
     const master = (this.master ?? Tone.getDestination()) as Tone.ToneAudioNode;
     const gain = new Tone.Gain(0).connect(master);    // audible path, silent until triggered
     const meter = new Tone.Meter({ normalRange: true, smoothing: 0.8 });
-    const fft = new Tone.FFT({ size: 32, smoothing: 0.8 }); // EQ bands for routing
+    const fft = new Tone.FFT({ size: 256, smoothing: 0.8 }); // EQ bands for routing + the visual EQ editor
     const player = new Tone.Player(ab);
     player.loop = true;
     player.connect(gain);                             // → master (gated by trigger volume)
@@ -407,16 +407,30 @@ export class AudioEngine {
     const l = this.loops.get(sensorId);
     return !!l && l.player.state === 'started';
   }
-  /** Level 0..1 of one EQ band of a sensor's loop — route this to its layer. */
-  getLoopBand(sensorId: string, band: 'full' | 'low' | 'mid' | 'high'): number {
-    if (band === 'full') return this.getLoopLevel(sensorId);
+  /** Nyquist of the audio context — the top of the frequency axis for any EQ UI. */
+  get nyquist(): number {
+    return Tone.getContext().sampleRate / 2;
+  }
+  /** Raw magnitude spectrum (dB, ~ -100 quiet … 0 loud) of a sensor's loop —
+   *  for drawing a live EQ / spectrum view. Bin `k` is centred at
+   *  `(k / arr.length) * nyquist` Hz. Null while no loop is loaded. */
+  getLoopSpectrum(sensorId: string): Float32Array | null {
+    const l = this.loops.get(sensorId);
+    if (!l) return null;
+    return l.fft.getValue() as Float32Array;
+  }
+  /** Level 0..1 of an arbitrary Hz range of a sensor's loop — the same math
+   *  that drives the low/mid/high presets, generalized so a hand-picked EQ
+   *  range drives its layer exactly like the visual editor previews it. */
+  getLoopBandRange(sensorId: string, minHz: number, maxHz: number): number {
     const l = this.loops.get(sensorId);
     if (!l) return 0;
     const arr = l.fft.getValue() as Float32Array;
     const n = arr.length;
     if (!n) return 0;
-    const lo = band === 'low' ? 0 : band === 'mid' ? Math.floor(n / 3) : Math.floor((2 * n) / 3);
-    const hi = band === 'low' ? Math.floor(n / 3) : band === 'mid' ? Math.floor((2 * n) / 3) : n;
+    const nyq = this.nyquist;
+    const lo = Math.max(0, Math.min(n - 1, Math.floor((minHz / nyq) * n)));
+    const hi = Math.max(lo + 1, Math.min(n, Math.ceil((maxHz / nyq) * n)));
     let sum = 0;
     let c = 0;
     for (let k = lo; k < hi; k++) {
@@ -426,6 +440,14 @@ export class AudioEngine {
     if (!c) return 0;
     const db = sum / c; // average magnitude in dB (~ -100 quiet … 0 loud)
     return Math.min(1, Math.max(0, (db + 70) / 55)); // map dB → 0..1 (loud-ish = 1)
+  }
+  /** Level 0..1 of one preset EQ band of a sensor's loop — route this to its layer. */
+  getLoopBand(sensorId: string, band: 'full' | 'low' | 'mid' | 'high'): number {
+    if (band === 'full') return this.getLoopLevel(sensorId);
+    const nyq = this.nyquist;
+    const lo = band === 'low' ? 0 : band === 'mid' ? nyq / 3 : (2 * nyq) / 3;
+    const hi = band === 'low' ? nyq / 3 : band === 'mid' ? (2 * nyq) / 3 : nyq;
+    return this.getLoopBandRange(sensorId, lo, hi);
   }
 
   private playSample(layer: SampleLayer, rate: number, pan: number): boolean {

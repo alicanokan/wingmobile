@@ -975,7 +975,10 @@ function ImageFeather({
       // each layer reacts to ITS OWN loop, on the EQ band it's routed to
       const sid = SENSOR_CHANNELS[i].sensor;
       const sr = rig.sensors[sid];
-      audioCh[i] = audio.getLoopBand(sid, sr?.audioBand ?? 'full');
+      const band = sr?.audioBand ?? 'full';
+      audioCh[i] = band === 'custom' && sr?.audioBandRange
+        ? audio.getLoopBandRange(sid, sr.audioBandRange[0], sr.audioBandRange[1])
+        : audio.getLoopBand(sid, band === 'custom' ? 'full' : band);
       // AUTO-AUDIO: loops play on their own and DRIVE their layer (charge / colour /
       // motion) without any sensor trigger — each loop animates a different layer.
       if (g.autoAudio && audio.hasLoop(sid)) {

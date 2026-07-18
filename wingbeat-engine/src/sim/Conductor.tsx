@@ -23,6 +23,7 @@ import { WingbeatEngine } from '../engine/WingbeatEngine.ts';
 import { AudioEngine } from '../engine/AudioEngine.ts';
 import { SimTransport } from '../transports/SimTransport.ts';
 import { Projection } from './Projection.tsx';
+import { EqEditor } from './EqEditor.tsx';
 import {
   defaultPreset,
   loadIntoRig,
@@ -100,8 +101,15 @@ export default function Conductor() {
   const previewSim = useMemo(() => new SimTransport(), []);
   const [previewAudioOn, setPreviewAudioOn] = useState(false);
   const [testingSensors, setTestingSensors] = useState<Set<string>>(new Set());
+  const [eqOpen, setEqOpen] = useState<Set<string>>(new Set());
+  const toggleEq = (sensorId: string) =>
+    setEqOpen((s) => {
+      const n = new Set(s);
+      if (n.has(sensorId)) n.delete(sensorId);
+      else n.add(sensorId);
+      return n;
+    });
   const loadedSample = useRef<Record<string, string>>({}); // sensorId → sample id currently loaded in the preview
-  const heldTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({}); // safety auto-stop per sensor
 
   useEffect(() => {
     previewSim.connect(previewEngine);
@@ -117,8 +125,6 @@ export default function Conductor() {
     });
     return () => {
       offNode();
-      Object.values(heldTimers.current).forEach(clearTimeout);
-      heldTimers.current = {};
       previewSim.disconnect();
     };
   }, [previewEngine, previewAudio, previewSim]);
@@ -133,10 +139,6 @@ export default function Conductor() {
   const stopSensorTest = useCallback((sensorId: string) => {
     previewSim.releaseWind(sensorId);
     previewSim.setPresence(sensorId, false);
-    if (heldTimers.current[sensorId]) {
-      clearTimeout(heldTimers.current[sensorId]);
-      delete heldTimers.current[sensorId];
-    }
     setTestingSensors((s) => {
       if (!s.has(sensorId)) return s;
       const n = new Set(s);
@@ -147,8 +149,11 @@ export default function Conductor() {
 
   /** Start a sensor's test — loads its assigned sample if needed, then HOLDS it
    *  (like a held key) until stopSensorTest is called, so Attack/Release and the
-   *  sample's own length are fully audible/visible instead of a fixed blip. Auto-
-   *  stops after 20s as a safety net against a forgotten drone. */
+   *  sample's own length are fully audible/visible instead of a fixed blip.
+   *  No auto-stop: audio and the particle reaction only end when you press Stop
+   *  (or leave the page, which tears the preview down). A timed auto-stop here
+   *  would silently desync the two — sound cutting out while the shape is still
+   *  held "active" is exactly the bug this is meant to avoid. */
   const startSensorTest = async (sensorId: string) => {
     try {
       if (!previewAudio.ready) await previewAudio.init();
@@ -168,7 +173,6 @@ export default function Conductor() {
       previewSim.setPresence(sensorId, true);
       previewSim.holdWind(sensorId, 1);
       setTestingSensors((s) => new Set(s).add(sensorId));
-      heldTimers.current[sensorId] = setTimeout(() => stopSensorTest(sensorId), 20000);
     } catch (e) {
       setStatus(String(e));
     }
@@ -466,11 +470,31 @@ export default function Conductor() {
                       </label>
                       <label className="cond-field">
                         <span>EQ band</span>
-                        <select value={s.audioBand} onChange={(e) => patchSensor(c.sensor, (x) => { x.audioBand = e.target.value as SensorRig['audioBand']; })}>
-                          {AUDIO_BANDS.map((b) => <option key={b} value={b}>{AUDIO_BAND_LABELS[b]}</option>)}
-                        </select>
+                        <div className="cond-field-row" style={{ gap: 6 }}>
+                          <select style={{ flex: 1 }} value={s.audioBand} onChange={(e) => patchSensor(c.sensor, (x) => { x.audioBand = e.target.value as SensorRig['audioBand']; })}>
+                            {AUDIO_BANDS.map((b) => <option key={b} value={b}>{AUDIO_BAND_LABELS[b]}</option>)}
+                          </select>
+                          <button
+                            className={`wb-btn ${eqOpen.has(c.sensor) ? 'active' : ''}`}
+                            style={{ padding: '5px 8px' }}
+                            onClick={() => toggleEq(c.sensor)}
+                            title="Visual EQ — see the loop's spectrum and set a custom frequency range"
+                          >
+                            ≈ EQ
+                          </button>
+                        </div>
                       </label>
                     </div>
+
+                    {eqOpen.has(c.sensor) && (
+                      <EqEditor
+                        audio={previewAudio}
+                        sensorId={c.sensor}
+                        band={s.audioBand}
+                        range={s.audioBandRange}
+                        onChange={(band, range) => patchSensor(c.sensor, (x) => { x.audioBand = band; x.audioBandRange = range; })}
+                      />
+                    )}
 
                     <div className="cond-field">
                       <span>Affects layers</span>
