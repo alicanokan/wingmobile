@@ -499,6 +499,7 @@ export default function Conductor() {
                         sensorId={c.sensor}
                         band={s.audioBand}
                         range={s.audioBandRange}
+                        sensitivity={s.sensitivity ?? 1}
                         onChange={(band, range) => patchSensor(c.sensor, (x) => { x.audioBand = band; x.audioBandRange = range; })}
                       />
                     )}

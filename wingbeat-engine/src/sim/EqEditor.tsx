@@ -25,12 +25,13 @@ interface Props {
   sensorId: string;
   band: AudioBand;
   range?: [number, number];
+  sensitivity?: number; // input gain applied to the meter — matches Projection's audioCh
   onChange: (band: AudioBand, range: [number, number]) => void;
 }
 
 const fmtHz = (hz: number) => (hz >= 1000 ? `${(hz / 1000).toFixed(1)}kHz` : `${Math.round(hz)}Hz`);
 
-export function EqEditor({ audio, sensorId, band, range, onChange }: Props) {
+export function EqEditor({ audio, sensorId, band, range, sensitivity, onChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const meterFillRef = useRef<HTMLDivElement | null>(null);
   const meterValRef = useRef<HTMLSpanElement | null>(null);
@@ -85,15 +86,16 @@ export function EqEditor({ audio, sensorId, band, range, onChange }: Props) {
       ctx.lineWidth = 1;
       ctx.strokeRect(x0 + 0.5, 0.5, Math.max(1, x1 - x0 - 1), CANVAS_H - 1);
 
-      // live filtered-result meter (imperative — avoid a React re-render every frame)
-      const lvl = audio.getLoopBandRange(sensorId, liveMin, liveMax);
+      // live filtered-result meter (imperative — avoid a React re-render every frame).
+      // Scale by sensitivity so this reads the exact value Projection feeds the layer.
+      const lvl = Math.min(1, audio.getLoopBandRange(sensorId, liveMin, liveMax) * (sensitivity ?? 1));
       if (meterFillRef.current) meterFillRef.current.style.width = `${Math.round(lvl * 100)}%`;
       if (meterValRef.current) meterValRef.current.textContent = lvl.toFixed(2);
     };
     rafRef.current = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audio, sensorId, liveMin, liveMax, nyquist]);
+  }, [audio, sensorId, liveMin, liveMax, nyquist, sensitivity]);
 
   const fracAt = (clientX: number) => {
     const rect = canvasRef.current?.getBoundingClientRect();

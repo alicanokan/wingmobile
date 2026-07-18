@@ -976,9 +976,13 @@ function ImageFeather({
       const sid = SENSOR_CHANNELS[i].sensor;
       const sr = rig.sensors[sid];
       const band = sr?.audioBand ?? 'full';
-      audioCh[i] = band === 'custom' && sr?.audioBandRange
+      const rawBand = band === 'custom' && sr?.audioBandRange
         ? audio.getLoopBandRange(sid, sr.audioBandRange[0], sr.audioBandRange[1])
         : audio.getLoopBand(sid, band === 'custom' ? 'full' : band);
+      // Share ONE input gain with the motion path (App.tsx applies the same
+      // sensitivity to holdWind), so Sensitivity scales the audio-reactive glow
+      // and the EQ band together instead of them drifting as independent gains.
+      audioCh[i] = Math.min(1, rawBand * (sr?.sensitivity ?? 1));
       // AUTO-AUDIO: loops play on their own and DRIVE their layer (charge / colour /
       // motion) without any sensor trigger — each loop animates a different layer.
       if (g.autoAudio && audio.hasLoop(sid)) {
