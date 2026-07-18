@@ -32,6 +32,7 @@ import {
   MOTION_LABELS,
   AUDIO_BANDS,
   AUDIO_BAND_LABELS,
+  audioRouteTargets,
   type SensorRig,
 } from './rig.ts';
 import {
@@ -116,6 +117,78 @@ function LiveMeter({
   );
 }
 
+/** How much balloon air a part is holding — i.e. how hard it's been pulsed.
+ *  Reads the live ref each frame rather than re-rendering React. */
+function AirMeter({ airRef, sensorId }: { airRef: React.RefObject<Record<string, number>>; sensorId: string }) {
+  const fillRef = useRef<HTMLDivElement | null>(null);
+  const valRef = useRef<HTMLSpanElement | null>(null);
+  const rafRef = useRef(0);
+  useEffect(() => {
+    const tick = () => {
+      const a = airRef.current?.[sensorId] ?? 0;
+      if (fillRef.current) fillRef.current.style.width = `${Math.round(Math.min(1, a) * 100)}%`;
+      if (valRef.current) valRef.current.textContent = a.toFixed(2);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [airRef, sensorId]);
+  return (
+    <div className="cond-air">
+      <span className="cond-air-label">Pulse air</span>
+      <div className="cond-air-bar"><div ref={fillRef} className="cond-air-fill" /></div>
+      <span ref={valRef} className="cond-air-val">0.00</span>
+    </div>
+  );
+}
+
+/** The audio channel(s) routed INTO this part, with the live filtered level
+ *  they're feeding it (loudest wins, matching the engine's router). */
+function RoutedAudioIn({
+  audio, sources,
+}: {
+  audio: AudioEngine;
+  sources: { id: string; label: string; eqOn: boolean; band: SensorRig['audioBand']; range?: [number, number] }[];
+}) {
+  const fillRef = useRef<HTMLDivElement | null>(null);
+  const valRef = useRef<HTMLSpanElement | null>(null);
+  const rafRef = useRef(0);
+  const srcRef = useRef(sources);
+  srcRef.current = sources; // always read the latest routing without resubscribing
+  useEffect(() => {
+    const tick = () => {
+      let v = 0;
+      if (audio.ready) {
+        for (const s of srcRef.current) {
+          const x = !s.eqOn
+            ? audio.getLoopLevel(s.id)
+            : s.band === 'custom' && s.range
+              ? audio.getLoopBandRange(s.id, s.range[0], s.range[1])
+              : audio.getLoopBand(s.id, s.band === 'custom' ? 'full' : s.band);
+          if (x > v) v = x;
+        }
+      }
+      if (fillRef.current) fillRef.current.style.width = `${Math.round(Math.min(1, v) * 100)}%`;
+      if (valRef.current) valRef.current.textContent = v.toFixed(2);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [audio]);
+  return (
+    <div className="cond-audioin">
+      <div className="cond-audioin-top">
+        <span className="cond-audioin-label">Audio in</span>
+        <span className="cond-audioin-src">{sources.map((s) => s.label).join(' · ')}</span>
+      </div>
+      <div className="cond-audioin-row">
+        <div className="cond-audioin-bar"><div ref={fillRef} className="cond-audioin-fill" /></div>
+        <span ref={valRef} className="cond-audioin-val">0.00</span>
+      </div>
+    </div>
+  );
+}
+
 export default function Conductor() {
   const [samples, setSamples] = useState<CloudSample[]>([]);
   const [presets, setPresets] = useState<CloudPreset[]>([]);
@@ -149,6 +222,7 @@ export default function Conductor() {
       return n;
     });
   const loadedSample = useRef<Record<string, string>>({}); // sensorId → sample id currently loaded in the preview
+  const air = useRef<Record<string, number>>({}); // sensorId → balloon air 0..1 (pumped by Pulse, leaks out)
 
   useEffect(() => {
     previewSim.connect(previewEngine);
@@ -176,6 +250,38 @@ export default function Conductor() {
     loadIntoRig(cfg.preset);
   }, [cfg]);
 
+  // BALLOON LEAK: air pumped in by Pulse bleeds back out at a rate that follows
+  // the sensor's Release, and the current air level is what drives the sensor.
+  // So a burst of pulses inflates it loud+lively and it settles back to silence
+  // on its own. Sensors under Test are skipped — Test holds them open.
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    const tick = (t: number) => {
+      const dt = Math.min(0.1, (t - last) / 1000);
+      last = t;
+      for (const c of SENSOR_CHANNELS) {
+        const id = c.sensor;
+        if (testingSensors.has(id)) continue;
+        const a = air.current[id] ?? 0;
+        if (a <= 0) continue;
+        const rel = cfg.preset.sensors[id]?.release ?? 0.08;
+        const next = a - dt * (0.18 + rel * 2.2);
+        if (next > 0.02) {
+          air.current[id] = next;
+          previewSim.holdWind(id, next);
+        } else {
+          air.current[id] = 0;
+          previewSim.releaseWind(id);
+          previewSim.setPresence(id, false);
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [cfg, testingSensors, previewSim]);
+
   // While a sensor is under Test, keep its injected level tied to its LIVE
   // Sensitivity so dragging the slider visibly changes the motion + volume in
   // the preview (previously Test held a fixed full signal, so Sensitivity did
@@ -199,6 +305,7 @@ export default function Conductor() {
     previewSim.setPresence(sensorId, false);
     previewAudio.clearLoop(sensorId);
     delete loadedSample.current[sensorId];
+    air.current[sensorId] = 0; // let all the balloon air out too
     setTestingSensors((s) => {
       if (!s.has(sensorId)) return s;
       const n = new Set(s);
@@ -206,6 +313,25 @@ export default function Conductor() {
       return n;
     });
   }, [previewSim, previewAudio]);
+
+  /** Make sure the audio context is live and this sensor's assigned loop is
+   *  loaded, so a Test *or* a Pulse actually makes sound. */
+  const ensureLoop = useCallback(async (sensorId: string) => {
+    if (!previewAudio.ready) await previewAudio.init();
+    await previewAudio.resume();
+    setPreviewAudioOn(true);
+    const ref = cfg.sensorSamples[sensorId] ?? null;
+    if (ref) {
+      if (loadedSample.current[sensorId] !== ref.id) {
+        const buf = await fetchSampleBuffer(ref);
+        await previewAudio.loadLoopBuffer(sensorId, buf, ref.name);
+        loadedSample.current[sensorId] = ref.id;
+      }
+    } else if (loadedSample.current[sensorId]) {
+      previewAudio.clearLoop(sensorId);
+      delete loadedSample.current[sensorId];
+    }
+  }, [cfg, previewAudio]);
 
   /** Start a sensor's test — loads its assigned sample if needed, then HOLDS it
    *  (like a held key) until stopSensorTest is called, so Attack/Release and the
@@ -216,20 +342,7 @@ export default function Conductor() {
    *  held "active" is exactly the bug this is meant to avoid. */
   const startSensorTest = async (sensorId: string) => {
     try {
-      if (!previewAudio.ready) await previewAudio.init();
-      await previewAudio.resume();
-      setPreviewAudioOn(true);
-      const ref = cfg.sensorSamples[sensorId] ?? null;
-      if (ref) {
-        if (loadedSample.current[sensorId] !== ref.id) {
-          const buf = await fetchSampleBuffer(ref);
-          await previewAudio.loadLoopBuffer(sensorId, buf, ref.name);
-          loadedSample.current[sensorId] = ref.id;
-        }
-      } else if (loadedSample.current[sensorId]) {
-        previewAudio.clearLoop(sensorId);
-        delete loadedSample.current[sensorId];
-      }
+      await ensureLoop(sensorId);
       // Inject a full breath SCALED by this sensor's sensitivity, so the test
       // reflects the same input gain the real installation applies. The live
       // effect below keeps it in sync while you drag the Sensitivity slider.
@@ -255,23 +368,23 @@ export default function Conductor() {
     else SENSOR_CHANNELS.forEach((c, i) => setTimeout(() => void startSensorTest(c.sensor), i * 150));
   };
 
-  /** Fire a one-shot pulse (wing-beat) on a part in the preview: a momentary
-   *  spike scaled by the sensor's sensitivity, then release so Attack/Release
-   *  play out the beat. If the sensor is under Test, restore its held level
-   *  afterwards instead of releasing, so the audition keeps running. Purely a
-   *  preview action — nothing is pushed live. */
-  const pulseSensor = (sensorId: string) => {
-    const sens = Math.min(1, cfg.preset.sensors[sensorId]?.sensitivity ?? 1);
-    previewSim.setPresence(sensorId, true);
-    previewSim.holdWind(sensorId, sens);
-    setTimeout(() => {
-      if (testingSensors.has(sensorId)) {
-        previewSim.holdWind(sensorId, sens); // keep the ongoing Test hold
-      } else {
-        previewSim.releaseWind(sensorId);
-        previewSim.setPresence(sensorId, false);
-      }
-    }, 160);
+  /** PULSE = pumping a balloon. Each press puffs more air IN, so pulses STACK:
+   *  the more you pulse, the more interaction air the part has, the louder and
+   *  more agitated it gets. The air then leaks back out (see the effect below),
+   *  and since the air level IS the sensor's drive, no pulses means no air —
+   *  which means no sound and no reaction at all. Preview only. */
+  const pulseSensor = async (sensorId: string) => {
+    try {
+      await ensureLoop(sensorId); // a pulse has to be able to make sound
+      const sens = cfg.preset.sensors[sensorId]?.sensitivity ?? 1;
+      const puff = 0.4 * Math.min(1.5, sens);
+      const next = Math.min(1, (air.current[sensorId] ?? 0) + puff);
+      air.current[sensorId] = next;
+      previewSim.setPresence(sensorId, true);
+      previewSim.holdWind(sensorId, next);
+    } catch (e) {
+      setStatus(String(e));
+    }
   };
 
   const featherPresets = useMemo(() => presets.filter((p) => p.feather === feather), [presets, feather]);
@@ -312,6 +425,22 @@ export default function Conductor() {
     patch((c) => {
       const s = c.preset.sensors[sensorId];
       if (s) fn(s);
+    });
+
+  /** Toggle one cell of the AUDIO → VIDEO router. The identity route is implicit
+   *  until you touch a row, so we materialise it on first edit. */
+  const toggleRoute = (srcId: string, dstId: string) =>
+    patch((c) => {
+      const routes = (c.preset.audioRoutes ??= {});
+      const cur = routes[srcId] ?? [srcId];
+      routes[srcId] = cur.includes(dstId) ? cur.filter((t) => t !== dstId) : [...cur, dstId];
+    });
+
+  /** OFF — this channel's sound drives no part at all (an explicit empty route,
+   *  which is distinct from "unset", i.e. the implicit identity route). */
+  const routeOff = (srcId: string) =>
+    patch((c) => {
+      (c.preset.audioRoutes ??= {})[srcId] = [];
     });
 
   const selectFeather = (id: string) => {
@@ -528,6 +657,48 @@ export default function Conductor() {
                 </div>
               );
             })}
+
+            {/* ROUTER — sends each channel's FILTERED value to the video part(s)
+                it should drive. Sits alongside the channels it patches. */}
+            <div className="cond-router">
+              <div className="cond-router-head">Audio → Video router</div>
+              <div className="cond-router-sub">filtered level drives the routed part</div>
+              <table className="cond-matrix">
+                <thead>
+                  <tr>
+                    <th />
+                    <th className="cond-matrix-off">Off</th>
+                    {SENSOR_CHANNELS.map((p) => <th key={p.sensor} title={p.label}>{p.label}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {SENSOR_CHANNELS.map((src) => {
+                    const targets = audioRouteTargets(cfg.preset, src.sensor);
+                    return (
+                      <tr key={src.sensor}>
+                        <th title={`${src.label} audio`}>{src.label}</th>
+                        <td>
+                          <button
+                            className={`cond-cell cond-cell-off ${targets.length === 0 ? 'on' : ''}`}
+                            onClick={() => routeOff(src.sensor)}
+                            title={`${src.label} audio drives nothing`}
+                          />
+                        </td>
+                        {SENSOR_CHANNELS.map((dst) => (
+                          <td key={dst.sensor}>
+                            <button
+                              className={`cond-cell ${targets.includes(dst.sensor) ? 'on' : ''}`}
+                              onClick={() => toggleRoute(src.sensor, dst.sensor)}
+                              title={`${src.label} audio → ${dst.label} video`}
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div className="cond-lib">
@@ -572,6 +743,13 @@ export default function Conductor() {
               {SENSOR_CHANNELS.map((c) => {
                 const s = cfg.preset.sensors[c.sensor];
                 if (!s) return null;
+                // which audio channels does the router feed into this part?
+                const audioIn = SENSOR_CHANNELS
+                  .filter((src) => audioRouteTargets(cfg.preset, src.sensor).includes(c.sensor))
+                  .map((src) => {
+                    const ss = cfg.preset.sensors[src.sensor];
+                    return { id: src.sensor, label: src.label, eqOn: ss?.eqOn !== false, band: ss?.audioBand ?? 'full', range: ss?.audioBandRange };
+                  });
                 return (
                   <div key={c.sensor} className="cond-vpart">
                     <div className="cond-vpart-head">
@@ -579,10 +757,15 @@ export default function Conductor() {
                         <b>{c.label}</b>
                         <span className="cond-sensor-sub">{c.sensor} · {c.kind}</span>
                       </div>
-                      <button className="cond-pulse" onClick={() => pulseSensor(c.sensor)} title="Fire a one-shot wing-beat pulse on this part (preview only)">
+                      <button className="cond-pulse" onClick={() => void pulseSensor(c.sensor)} title="Pump this part like a balloon — pulses stack, then the air leaks out">
                         ● Pulse
                       </button>
                     </div>
+
+                    <AirMeter airRef={air} sensorId={c.sensor} />
+
+                    {audioIn.length > 0 && <RoutedAudioIn audio={previewAudio} sources={audioIn} />}
+
                     <div className="cond-field-row">
                       <label className="cond-field">
                         <span>Motion</span>
@@ -652,6 +835,7 @@ export default function Conductor() {
             <Slider label="Size" value={g.size} min={20} max={90} step={1} onChange={(v) => patch((c) => { c.preset.global.size = v; })} fmt={(v) => v.toFixed(0)} />
             <Slider label="Tempo" value={g.bpm} min={60} max={200} step={1} onChange={(v) => patch((c) => { c.preset.global.bpm = v; })} fmt={(v) => `${v.toFixed(0)} bpm`} />
             <Slider label="Idle fall" value={g.idleFall} min={0} max={30} step={0.5} onChange={(v) => patch((c) => { c.preset.global.idleFall = v; })} fmt={(v) => `${v.toFixed(1)}s`} />
+            <Slider label="Auto layers" value={cfg.preset.autoK} min={2} max={6} step={1} onChange={(v) => patch((c) => { c.preset.autoK = v; })} fmt={(v) => v.toFixed(0)} />
             <label className="cond-check">
               <input type="checkbox" checked={g.autoAudio} onChange={(e) => patch((c) => { c.preset.global.autoAudio = e.target.checked; })} />
               auto audio (loops play + drive layers without triggering)

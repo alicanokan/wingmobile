@@ -127,6 +127,63 @@
 .cond-achan-head b { color: #e8e8f2; font-weight: 500; font-size: 12px; letter-spacing: 0.06em; }
 .cond-achan-head .cond-sensor-sub { display: inline; margin: 0; }
 
+/* AUDIO → VIDEO router — patches each channel's filtered level onto part(s) */
+.cond-router {
+  background: #10101a;
+  border: 1px solid #1c1c2b;
+  border-left: 3px solid #4ade80;
+  border-radius: 8px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-self: start;
+}
+.cond-router-head { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: #8fe3ae; }
+.cond-router-sub { font-size: 9px; color: #55556a; margin-bottom: 3px; }
+.cond-matrix { border-collapse: collapse; font-size: 9px; color: #71718a; }
+.cond-matrix th { font-weight: 400; letter-spacing: 0.03em; padding: 1px 2px; text-align: center; white-space: nowrap; }
+.cond-matrix tbody th { text-align: right; padding-right: 5px; }
+.cond-matrix td { padding: 1px; text-align: center; }
+.cond-cell {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid #26263a;
+  background: #14141f;
+  padding: 0;
+  cursor: pointer;
+}
+.cond-cell:hover { border-color: #4ade8088; }
+.cond-cell.on { background: #4ade80; border-color: #4ade80; box-shadow: 0 0 6px #4ade8066; }
+.cond-matrix-off { color: #55556a; }
+.cond-cell-off.on { background: #71718a; border-color: #71718a; box-shadow: none; }
+
+/* pulse air (balloon fill) + routed audio-in, on each video part card */
+.cond-air { display: grid; grid-template-columns: 56px 1fr 30px; align-items: center; gap: 6px; }
+.cond-air-label { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #6a6a80; }
+.cond-air-bar { height: 6px; border-radius: 4px; background: #14141f; border: 1px solid #26263a; overflow: hidden; }
+.cond-air-fill { height: 100%; width: 0%; border-radius: 4px; background: linear-gradient(90deg, #2f7d4a, #6fe39a); transition: width 60ms linear; }
+.cond-air-val { font-size: 10px; color: #6fe39a; text-align: right; font-variant-numeric: tabular-nums; }
+
+.cond-audioin {
+  border: 1px solid #26263a;
+  border-left: 3px solid #4ade80;
+  border-radius: 6px;
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: #0d0d16;
+}
+.cond-audioin-top { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.cond-audioin-label { font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: #8fe3ae; }
+.cond-audioin-src { font-size: 9px; color: #9c9cb0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cond-audioin-row { display: grid; grid-template-columns: 1fr 30px; align-items: center; gap: 6px; }
+.cond-audioin-bar { height: 6px; border-radius: 4px; background: #14141f; border: 1px solid #26263a; overflow: hidden; }
+.cond-audioin-fill { height: 100%; width: 0%; border-radius: 4px; background: linear-gradient(90deg, #3f7fd8, #9ecbff); transition: width 60ms linear; }
+.cond-audioin-val { font-size: 10px; color: #9ecbff; text-align: right; font-variant-numeric: tabular-nums; }
+
 /* sample library block inside the audio engine */
 .cond-lib { flex: 0 0 auto; border-top: 1px solid #1c1c2b; padding-top: 6px; }
 .cond-lib-head { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: #71718a; margin-bottom: 5px; }
@@ -639,3 +696,20 @@
 .cond-light .cond-video-out { background: #efeee8; border-color: #e2e0d8; }
 .cond-light .cond-video-out-head { color: #75758a; border-bottom-color: #e2e0d8; }
 .cond-light .cond-video-out-canvas { background: #efeee8; }
+.cond-light .cond-router { background: #fbfaf6; border-color: #e2e0d8; border-left-color: #34c46e; }
+.cond-light .cond-router-head { color: #1f8a4c; }
+.cond-light .cond-router-sub { color: #9a9aa2; }
+.cond-light .cond-matrix { color: #75758a; }
+.cond-light .cond-cell { background: #fff; border-color: #d8d6cc; }
+.cond-light .cond-cell:hover { border-color: #34c46e88; }
+.cond-light .cond-cell.on { background: #34c46e; border-color: #34c46e; box-shadow: 0 0 6px #34c46e55; }
+.cond-light .cond-matrix-off { color: #9a9aa2; }
+.cond-light .cond-cell-off.on { background: #9a9aa2; border-color: #9a9aa2; box-shadow: none; }
+.cond-light .cond-air-label { color: #8a8a92; }
+.cond-light .cond-air-bar { background: #eceae2; border-color: #d8d6cc; }
+.cond-light .cond-air-val { color: #1f8a4c; }
+.cond-light .cond-audioin { background: #fbfaf6; border-color: #e2e0d8; border-left-color: #34c46e; }
+.cond-light .cond-audioin-label { color: #1f8a4c; }
+.cond-light .cond-audioin-src { color: #6f6f7a; }
+.cond-light .cond-audioin-bar { background: #eceae2; border-color: #d8d6cc; }
+.cond-light .cond-audioin-val { color: #2266aa; }

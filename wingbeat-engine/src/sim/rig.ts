@@ -119,7 +119,17 @@ export interface FeatherPreset {
   autoColors: ([number, number, number] | null)[]; // per-auto-layer color-source override
   global: GlobalRig;
   sensors: Record<string, SensorRig>;
+  /** AUDIO → VIDEO routing: audio channel sensorId → the feather-part sensorIds
+   *  its EQ-filtered level drives. Absent/empty = identity (a channel drives its
+   *  own part), which is how every pre-router preset behaved. */
+  audioRoutes?: Record<string, string[]>;
   updatedAt?: number;
+}
+
+/** The feather parts an audio channel's filtered level drives (identity default). */
+export function audioRouteTargets(preset: FeatherPreset, channelId: string): string[] {
+  const r = preset.audioRoutes?.[channelId];
+  return r ?? [channelId];
 }
 
 // Device capability detection for adaptive particle optimization.
@@ -204,7 +214,10 @@ export function particleSampleW(): number {
 export function defaultSensorRig(sensorId: string): SensorRig {
   const idx = SENSOR_CHANNELS.findIndex((c) => c.sensor === sensorId);
   return {
-    modules: { movement: true, monitor: true, release: false, color: false },
+    // Envelope ON by default: the Conductor always shows a per-part Attack /
+    // Release, and with this false those values were silently ignored (the
+    // global envelope was used instead), so setting them appeared to do nothing.
+    modules: { movement: true, monitor: true, release: true, color: false },
     motionType: 'swirl',
     audioBand: 'full',
     eqOn: true,
@@ -216,7 +229,11 @@ export function defaultSensorRig(sensorId: string): SensorRig {
     release: 0.08,
     colorOverride: false,
     overrideRGB: [1, 0.8, 0.3],
-    layers: idx >= 0 ? [idx % 4] : [], // a sensible unique-ish default routing
+    // One layer per sensor. This used to be `idx % 4`, which wrapped the 5th
+    // sensor (Tail) back onto layer 0 — the same layer as Tip — so pulsing Tail
+    // visibly moved the Tip's particles. autoK now defaults to 5 so every
+    // sensor has a layer of its own.
+    layers: idx >= 0 ? [idx] : [],
     sensitivity: 1,
   };
 }
@@ -224,7 +241,8 @@ export function defaultSensorRig(sensorId: string): SensorRig {
 export function defaultPreset(feather: string): FeatherPreset {
   const sensors: Record<string, SensorRig> = {};
   for (const c of SENSOR_CHANNELS) sensors[c.sensor] = defaultSensorRig(c.sensor);
-  return { name: 'default', feather, autoK: 4, customLayers: [], layerSounds: [], layerGen: [], layerRel: [], autoColors: [], global: { ...DEFAULT_GLOBAL }, sensors };
+  // autoK 5 = one colour layer per sensor, so no two sensors share a layer.
+  return { name: 'default', feather, autoK: 5, customLayers: [], layerSounds: [], layerGen: [], layerRel: [], autoColors: [], global: { ...DEFAULT_GLOBAL }, sensors };
 }
 
 /** Sound config for a layer index (defaults to the built-in synth). */
@@ -261,6 +279,7 @@ export function loadIntoRig(preset: FeatherPreset) {
   rig.global = { ...DEFAULT_GLOBAL, ...preset.global };
   rig.sensors = {};
   for (const c of SENSOR_CHANNELS) rig.sensors[c.sensor] = { ...defaultSensorRig(c.sensor), ...preset.sensors?.[c.sensor] };
+  rig.audioRoutes = preset.audioRoutes ? JSON.parse(JSON.stringify(preset.audioRoutes)) : undefined;
   rig.updatedAt = preset.updatedAt;
 }
 

@@ -46,6 +46,7 @@ import {
   layerRelease,
   MAX_LAYERS,
   DEFAULT_GLOBAL,
+  audioRouteTargets,
   type LayerDef,
 } from './rig.ts';
 import { recallLast, saveLast } from './presets.ts';
@@ -787,8 +788,11 @@ function ImageFeather({
   const pumps = useRef(new Float32Array(NCH));
   const reveals = useRef(new Float32Array(MAX_LAYERS));   // per-layer charge level
   const revealTgt = useRef(new Float32Array(MAX_LAYERS)); // scratch: charge targets
+  const revealAtk = useRef(new Float32Array(MAX_LAYERS)); // scratch: driving part's attack (-1 = none)
+  const revealRel = useRef(new Float32Array(MAX_LAYERS)); // scratch: driving part's release (-1 = none)
   const pulses = useRef(new Float32Array(MAX_LAYERS).fill(2)); // per-layer beat wave (2 = idle)
   const floatHold = useRef(new Float32Array(NCH)); // seconds left of "float" before air sinks
+  const filtered = useRef(new Float32Array(NCH)); // per-AUDIO-channel post-EQ level, for the router
   const lastT = useRef(0);
   const wingRef = useRef(0); // smoothed wing-beat swing amplitude
   const idleRef = useRef(0); // seconds since last interaction (→ sand-fall)
@@ -947,6 +951,19 @@ function ImageFeather({
     const routeA = u.uRouteA.value as THREE.Vector4[];
     const routeB = u.uRouteB.value as THREE.Vector4[];
     const crgb = u.uColorRGB.value as THREE.Vector3[];
+    // FILTERED (post-EQ) level of every AUDIO channel, computed once per frame so
+    // the router below can send any channel's sound to any feather part.
+    for (let k = 0; k < NCH; k++) {
+      const ksid = SENSOR_CHANNELS[k].sensor;
+      const ksr = rig.sensors[ksid];
+      const kEqOn = ksr?.eqOn !== false;
+      const kBand = ksr?.audioBand ?? 'full';
+      filtered.current[k] = !kEqOn
+        ? audio.getLoopLevel(ksid)
+        : kBand === 'custom' && ksr?.audioBandRange
+          ? audio.getLoopBandRange(ksid, ksr.audioBandRange[0], ksr.audioBandRange[1])
+          : audio.getLoopBand(ksid, kBand === 'custom' ? 'full' : kBand);
+    }
     for (let i = 0; i < NCH; i++) {
       reach[i] = ru.uReach[i];
       swirl[i] = ru.uSwirl[i];
@@ -972,17 +989,15 @@ function ImageFeather({
       } else {
         pumps.current[i] *= 1 - ru.release[i] * 0.5; // sinking — lose height
       }
-      // each layer reacts to ITS OWN loop, on the EQ band it's routed to
+      // ROUTER: this part reacts to whichever AUDIO channel(s) are routed to it
+      // (loudest wins). No route table = identity, i.e. its own channel.
       const sid = SENSOR_CHANNELS[i].sensor;
       const sr = rig.sensors[sid];
-      // EQ off → the layer reacts to the FULL loop level (no band filtering).
-      const eqOn = sr?.eqOn !== false;
-      const band = sr?.audioBand ?? 'full';
-      const rawBand = !eqOn
-        ? audio.getLoopLevel(sid)
-        : band === 'custom' && sr?.audioBandRange
-          ? audio.getLoopBandRange(sid, sr.audioBandRange[0], sr.audioBandRange[1])
-          : audio.getLoopBand(sid, band === 'custom' ? 'full' : band);
+      let rawBand = 0;
+      for (let k = 0; k < NCH; k++) {
+        const targets = audioRouteTargets(rig, SENSOR_CHANNELS[k].sensor);
+        if (targets.includes(sid) && filtered.current[k] > rawBand) rawBand = filtered.current[k];
+      }
       // Share ONE input gain with the motion path (App.tsx applies the same
       // sensitivity to holdWind), so Sensitivity scales the audio-reactive glow
       // and the EQ band together instead of them drifting as independent gains.
@@ -1009,19 +1024,36 @@ function ImageFeather({
     // the layer's gen speed (restarted to ~0 on each trigger). As it rises 0→1 the
     // charge front climbs the shaft (calamus→rachis→barbs), revealing colour.
     const tgt = revealTgt.current;
+    const atkOf = revealAtk.current;
+    const relOf = revealRel.current;
     tgt.fill(0);
+    atkOf.fill(-1);
+    relOf.fill(-1);
     for (let i = 0; i < NCH; i++) {
       const a = Math.min(1, E[i] + pumps.current[i]);
       const s = rig.sensors[SENSOR_CHANNELS[i].sensor];
       if (!s) continue;
-      for (const li of s.layers) if (li < MAX_LAYERS && a > tgt[li]) tgt[li] = a;
+      // Remember WHICH sensor drives each layer so its Attack/Release shapes the
+      // reveal. Recorded even at zero activation, so the decay still uses the
+      // routed part's Release instead of snapping back at the layer default.
+      for (const li of s.layers) {
+        if (li >= MAX_LAYERS) continue;
+        if (atkOf[li] < 0 || a > tgt[li]) {
+          if (a > tgt[li]) tgt[li] = a;
+          atkOf[li] = s.attack;
+          relOf[li] = s.release;
+        }
+      }
     }
     const rv = reveals.current;
     const hold = Math.max(0, Math.min(1, g.hold)); // 1 = latch layers visible
     for (let L = 0; L < MAX_LAYERS; L++) {
-      // per-layer ATTACK climbs the charge; RELEASE decays it, but the global
-      // Layer-hold fader slows/freezes the decay so layers stay visible.
-      const rate = tgt[L] > rv[L] ? layerGen(L) : layerRelease(L) * (1 - hold);
+      // The ROUTED PART's Attack climbs the charge and its Release decays it, so
+      // the envelope you set on a part is what you actually see generate. Layers
+      // nothing routes to fall back to their own per-layer rates.
+      const atk = atkOf[L] >= 0 ? atkOf[L] : layerGen(L);
+      const rel = relOf[L] >= 0 ? relOf[L] : layerRelease(L);
+      const rate = tgt[L] > rv[L] ? atk : rel * (1 - hold);
       rv[L] += (tgt[L] - rv[L]) * rate;
     }
     (u.uRevealA.value as THREE.Vector4).set(rv[0], rv[1], rv[2], rv[3]);
