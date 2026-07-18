@@ -255,6 +255,25 @@ export default function Conductor() {
     else SENSOR_CHANNELS.forEach((c, i) => setTimeout(() => void startSensorTest(c.sensor), i * 150));
   };
 
+  /** Fire a one-shot pulse (wing-beat) on a part in the preview: a momentary
+   *  spike scaled by the sensor's sensitivity, then release so Attack/Release
+   *  play out the beat. If the sensor is under Test, restore its held level
+   *  afterwards instead of releasing, so the audition keeps running. Purely a
+   *  preview action — nothing is pushed live. */
+  const pulseSensor = (sensorId: string) => {
+    const sens = Math.min(1, cfg.preset.sensors[sensorId]?.sensitivity ?? 1);
+    previewSim.setPresence(sensorId, true);
+    previewSim.holdWind(sensorId, sens);
+    setTimeout(() => {
+      if (testingSensors.has(sensorId)) {
+        previewSim.holdWind(sensorId, sens); // keep the ongoing Test hold
+      } else {
+        previewSim.releaseWind(sensorId);
+        previewSim.setPresence(sensorId, false);
+      }
+    }, 160);
+  };
+
   const featherPresets = useMemo(() => presets.filter((p) => p.feather === feather), [presets, feather]);
   const featherLabel = FEATHERS.find((f) => f.id === feather)?.label ?? feather;
 
@@ -432,23 +451,87 @@ export default function Conductor() {
         </div>
       </header>
 
-      <div className="cond-cols">
-        {/* LEFT — feather, sample library, presets */}
-        <aside className="cond-side">
-          <section className="cond-sec">
-            <h3>Feather</h3>
-            <div className="cond-feathers">
-              {FEATHERS.map((f) => (
-                <button key={f.id} className={`cond-feather ${feather === f.id ? 'active' : ''}`} onClick={() => selectFeather(f.id)} title={f.label}>
-                  {f.procedural ? <span className="cond-feather-proc">✦</span> : <img src={f.src.replace('/feathers/', '/feathers/thumbs/')} alt={f.label} loading="lazy" />}
-                </button>
-              ))}
-            </div>
-            <div className="cond-feather-name">{featherLabel}</div>
-          </section>
+      {/* Two separate signal chains: an AUDIO ENGINE (sample → EQ → level) and a
+          FEATHER ENGINE (feather → per-part video controls → video output). */}
+      <div className="cond-engines">
+        {/* ═══════════ AUDIO ENGINE ═══════════ */}
+        <section className="cond-engine cond-engine-audio">
+          <div className="cond-engine-head">Audio Engine</div>
+          <div className="cond-achans">
+            {SENSOR_CHANNELS.map((c) => {
+              const s = cfg.preset.sensors[c.sensor];
+              if (!s) return null;
+              const assigned = cfg.sensorSamples[c.sensor] ?? null;
+              const eqOn = s.eqOn !== false;
+              const testing = testingSensors.has(c.sensor);
+              return (
+                <div key={c.sensor} className="cond-achan">
+                  <div className="cond-achan-head">
+                    <b>{c.label}</b>
+                    <span className="cond-sensor-sub">{c.sensor} · key {c.key.toUpperCase()}</span>
+                  </div>
+                  <div className="cond-field-row">
+                    <label className="cond-field">
+                      <span>Sample</span>
+                      <select value={assigned?.id ?? ''} onChange={(e) => assignSample(c.sensor, e.target.value)}>
+                        <option value="">— none —</option>
+                        {samples.map((smp) => (
+                          <option key={smp.id} value={smp.id}>{smp.name}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      className={`wb-btn ${testing ? 'active' : ''}`}
+                      onClick={() => toggleSensorTest(c.sensor)}
+                      title="Hold this sensor on the video output — nothing is pushed live"
+                    >
+                      {testing ? '■ Stop' : '▶ Test'}
+                    </button>
+                  </div>
 
-          <section className="cond-sec">
-            <h3>Sample library</h3>
+                  <LiveMeter audio={previewAudio} sensorId={c.sensor} mode="input" band={s.audioBand} range={s.audioBandRange} eqOn={eqOn} active={testing} label="Input level" />
+
+                  <div className="cond-eq-controls">
+                    <button
+                      className={`cond-eq-power ${eqOn ? 'on' : ''}`}
+                      onClick={() => patchSensor(c.sensor, (x) => { x.eqOn = !eqOn; })}
+                      title="EQ on/off — off reacts to the full-range level"
+                    >
+                      EQ {eqOn ? 'ON' : 'OFF'}
+                    </button>
+                    <select className="cond-eq-band" disabled={!eqOn} value={s.audioBand} onChange={(e) => patchSensor(c.sensor, (x) => { x.audioBand = e.target.value as SensorRig['audioBand']; })}>
+                      {AUDIO_BANDS.map((b) => <option key={b} value={b}>{AUDIO_BAND_LABELS[b]}</option>)}
+                    </select>
+                    <button
+                      className={`wb-btn ${eqOpen.has(c.sensor) ? 'active' : ''}`}
+                      style={{ padding: '5px 8px' }}
+                      disabled={!eqOn}
+                      onClick={() => toggleEq(c.sensor)}
+                      title="Visual EQ — see the loop's spectrum and set a custom frequency range"
+                    >
+                      ≈ EQ
+                    </button>
+                  </div>
+
+                  {eqOn && eqOpen.has(c.sensor) && (
+                    <EqEditor
+                      audio={previewAudio}
+                      sensorId={c.sensor}
+                      band={s.audioBand}
+                      range={s.audioBandRange}
+                      eqOn={eqOn}
+                      onChange={(band, range) => patchSensor(c.sensor, (x) => { x.audioBand = band; x.audioBandRange = range; })}
+                    />
+                  )}
+
+                  <LiveMeter audio={previewAudio} sensorId={c.sensor} mode="filtered" band={s.audioBand} range={s.audioBandRange} eqOn={eqOn} active={testing} label={eqOn ? 'Filtered' : 'Full (EQ off)'} />
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="cond-lib">
+            <div className="cond-lib-head">Sample library</div>
             <label className={`wb-btn ${uploading ? 'active' : ''}`} style={{ display: 'block', textAlign: 'center' }}>
               {uploading ? 'uploading…' : '⇧ Upload audio files'}
               <input type="file" accept="audio/*" multiple hidden disabled={uploading} onChange={(e) => { void doUpload(e.target.files); e.target.value = ''; }} />
@@ -466,198 +549,141 @@ export default function Conductor() {
                 </div>
               ))}
             </div>
-          </section>
+          </div>
+        </section>
 
-          <section className="cond-sec">
-            <h3>Presets · {featherLabel}</h3>
-            <div className="cond-preset-save">
-              <input className="wb-input" placeholder="preset name" value={presetName} onChange={(e) => setPresetName(e.target.value)} />
-              <button className="wb-btn" disabled={busy} onClick={() => void doSavePreset()}>save</button>
-            </div>
-            <div className="cond-presets">
-              {featherPresets.length === 0 && <div className="cond-empty">no presets for this feather yet</div>}
-              {featherPresets.map((p) => (
-                <div key={p.id} className="cond-preset">
-                  <span className="cond-preset-name" title={new Date(p.updated_at).toLocaleString()}>{p.name}</span>
-                  <button className="wb-btn" onClick={() => { setCfg(clone(p.config)); setPresetName(p.name); setStatus(`loaded "${p.name}"`); }}>load</button>
-                  <button className="wb-btn" onClick={() => { setCfg(clone(p.config)); setPresetName(p.name); void pushLive(feather, p.config, p.id).then(() => setStatus(`pushed "${p.name}" live ✓`)).catch((e) => setStatus(String(e))); }}>push</button>
-                  <button className="cond-x" onClick={() => { if (confirm(`Delete preset "${p.name}"?`)) void deleteCloudPreset(p.id).then(refreshPresets); }}>✕</button>
-                </div>
+        {/* ═══════════ FEATHER ENGINE ═══════════ */}
+        <section className="cond-engine cond-engine-video">
+          <div className="cond-engine-head">Feather Engine</div>
+
+          <div className="cond-feather-select">
+            <div className="cond-feathers">
+              {FEATHERS.map((f) => (
+                <button key={f.id} className={`cond-feather ${feather === f.id ? 'active' : ''}`} onClick={() => selectFeather(f.id)} title={f.label}>
+                  {f.procedural ? <span className="cond-feather-proc">✦</span> : <img src={f.src.replace('/feathers/', '/feathers/thumbs/')} alt={f.label} loading="lazy" />}
+                </button>
               ))}
             </div>
-          </section>
-        </aside>
+            <div className="cond-feather-name">{featherLabel}</div>
+          </div>
 
-        {/* RIGHT — per-sensor rigs + global reaction */}
-        <main className="cond-main">
-          <section className="cond-sec">
-            <h3>Sensors — audio · sensor control · video</h3>
-            <div className="cond-sensors">
+          <div className="cond-video-split">
+            <div className="cond-vparts">
               {SENSOR_CHANNELS.map((c) => {
                 const s = cfg.preset.sensors[c.sensor];
                 if (!s) return null;
-                const assigned = cfg.sensorSamples[c.sensor] ?? null;
                 return (
-                  <div key={c.sensor} className="cond-sensor">
-                    <div className="cond-sensor-head">
-                      <b>{c.label}</b>
-                      <span className="cond-sensor-sub">{c.sensor} · key {c.key.toUpperCase()} · {c.kind}</span>
-                    </div>
-
-                    {(() => {
-                      const eqOn = s.eqOn !== false;
-                      const testing = testingSensors.has(c.sensor);
-                      return (
-                    <>
-                    {/* ── AUDIO ── sample → level → EQ → filtered level */}
-                    <div className="cond-mod cond-mod-audio">
-                      <div className="cond-mod-label">Audio</div>
-                      <div className="cond-field-row">
-                        <label className="cond-field">
-                          <span>Sample</span>
-                          <select value={assigned?.id ?? ''} onChange={(e) => assignSample(c.sensor, e.target.value)}>
-                            <option value="">— none —</option>
-                            {samples.map((smp) => (
-                              <option key={smp.id} value={smp.id}>{smp.name}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <button
-                          className={`wb-btn ${testing ? 'active' : ''}`}
-                          onClick={() => toggleSensorTest(c.sensor)}
-                          title="Hold this sensor on the preview below — nothing is pushed live"
-                        >
-                          {testing ? '■ Stop' : '▶ Test'}
-                        </button>
+                  <div key={c.sensor} className="cond-vpart">
+                    <div className="cond-vpart-head">
+                      <div>
+                        <b>{c.label}</b>
+                        <span className="cond-sensor-sub">{c.sensor} · {c.kind}</span>
                       </div>
-
-                      <LiveMeter audio={previewAudio} sensorId={c.sensor} mode="input" band={s.audioBand} range={s.audioBandRange} eqOn={eqOn} active={testing} label="Input level" />
-
-                      <div className="cond-eq-controls">
-                        <button
-                          className={`cond-eq-power ${eqOn ? 'on' : ''}`}
-                          onClick={() => patchSensor(c.sensor, (x) => { x.eqOn = !eqOn; })}
-                          title="EQ on/off — off reacts to the full-range level"
-                        >
-                          EQ {eqOn ? 'ON' : 'OFF'}
-                        </button>
-                        <select className="cond-eq-band" disabled={!eqOn} value={s.audioBand} onChange={(e) => patchSensor(c.sensor, (x) => { x.audioBand = e.target.value as SensorRig['audioBand']; })}>
-                          {AUDIO_BANDS.map((b) => <option key={b} value={b}>{AUDIO_BAND_LABELS[b]}</option>)}
-                        </select>
-                        <button
-                          className={`wb-btn ${eqOpen.has(c.sensor) ? 'active' : ''}`}
-                          style={{ padding: '5px 8px' }}
-                          disabled={!eqOn}
-                          onClick={() => toggleEq(c.sensor)}
-                          title="Visual EQ — see the loop's spectrum and set a custom frequency range"
-                        >
-                          ≈ EQ
-                        </button>
-                      </div>
-
-                      {eqOn && eqOpen.has(c.sensor) && (
-                        <EqEditor
-                          audio={previewAudio}
-                          sensorId={c.sensor}
-                          band={s.audioBand}
-                          range={s.audioBandRange}
-                          eqOn={eqOn}
-                          onChange={(band, range) => patchSensor(c.sensor, (x) => { x.audioBand = band; x.audioBandRange = range; })}
-                        />
-                      )}
-
-                      <LiveMeter audio={previewAudio} sensorId={c.sensor} mode="filtered" band={s.audioBand} range={s.audioBandRange} eqOn={eqOn} active={testing} label={eqOn ? 'Filtered' : 'Full (EQ off)'} />
+                      <button className="cond-pulse" onClick={() => pulseSensor(c.sensor)} title="Fire a one-shot wing-beat pulse on this part (preview only)">
+                        ● Pulse
+                      </button>
                     </div>
-
-                    {/* ── SENSOR INPUT CONTROL ── masters both audio volume + video movement */}
-                    <div className="cond-mod cond-mod-sensor">
-                      <div className="cond-mod-label">Sensor input control</div>
-                      <Slider label="Sensitivity" value={s.sensitivity ?? 1} min={0.2} max={3} step={0.05} onChange={(v) => patchSensor(c.sensor, (x) => { x.sensitivity = v; })} fmt={(v) => `${v.toFixed(2)}×`} />
-                      <Slider label="Attack" value={s.attack} min={0.03} max={0.6} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.attack = v; x.modules.release = true; })} />
-                      <Slider label="Release" value={s.release} min={0.02} max={0.4} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.release = v; x.modules.release = true; })} />
-                      <Slider label="Reach" value={s.reach} min={0} max={1} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.reach = v; })} />
-                    </div>
-
-                    {/* ── VIDEO ── which layers move, how, and colour */}
-                    <div className="cond-mod cond-mod-video">
-                      <div className="cond-mod-label">Video</div>
+                    <div className="cond-field-row">
                       <label className="cond-field">
                         <span>Motion</span>
                         <select value={s.motionType} onChange={(e) => patchSensor(c.sensor, (x) => { x.motionType = e.target.value as SensorRig['motionType']; })}>
                           {MOTION_TYPES.map((m) => <option key={m} value={m}>{MOTION_LABELS[m]}</option>)}
                         </select>
                       </label>
-                      <div className="cond-field">
-                        <span>Affects layers</span>
-                        <div className="cond-layers">
-                          {Array.from({ length: MAX_LAYERS }, (_, li) => (
-                            <button
-                              key={li}
-                              className={`cond-layer ${s.layers.includes(li) ? 'on' : ''}`}
-                              onClick={() => patchSensor(c.sensor, (x) => { x.layers = x.layers.includes(li) ? x.layers.filter((n) => n !== li) : [...x.layers, li]; })}
-                            >
-                              L{li + 1}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="cond-field-row">
-                        <label className="cond-check">
-                          <input type="checkbox" checked={s.modules.movement} onChange={(e) => patchSensor(c.sensor, (x) => { x.modules.movement = e.target.checked; })} />
-                          moves particles
-                        </label>
-                        <label className="cond-check">
-                          <input type="checkbox" checked={s.modules.color} onChange={(e) => patchSensor(c.sensor, (x) => { x.modules.color = e.target.checked; })} />
-                          recolor
-                          <input type="color" value={rgbToHex(s.overrideRGB)} onChange={(e) => patchSensor(c.sensor, (x) => { x.overrideRGB = hexToRgb(e.target.value); })} />
-                        </label>
+                    </div>
+                    <div className="cond-field">
+                      <span>Affects layers</span>
+                      <div className="cond-layers">
+                        {Array.from({ length: MAX_LAYERS }, (_, li) => (
+                          <button
+                            key={li}
+                            className={`cond-layer ${s.layers.includes(li) ? 'on' : ''}`}
+                            onClick={() => patchSensor(c.sensor, (x) => { x.layers = x.layers.includes(li) ? x.layers.filter((n) => n !== li) : [...x.layers, li]; })}
+                          >
+                            L{li + 1}
+                          </button>
+                        ))}
                       </div>
                     </div>
-                    </>
-                      );
-                    })()}
+                    <Slider label="Sensitivity" value={s.sensitivity ?? 1} min={0.2} max={3} step={0.05} onChange={(v) => patchSensor(c.sensor, (x) => { x.sensitivity = v; })} fmt={(v) => `${v.toFixed(2)}×`} />
+                    <Slider label="Attack" value={s.attack} min={0.03} max={0.6} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.attack = v; x.modules.release = true; })} />
+                    <Slider label="Release" value={s.release} min={0.02} max={0.4} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.release = v; x.modules.release = true; })} />
+                    <Slider label="Reach" value={s.reach} min={0} max={1} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.reach = v; })} />
+                    <div className="cond-field-row">
+                      <label className="cond-check">
+                        <input type="checkbox" checked={s.modules.movement} onChange={(e) => patchSensor(c.sensor, (x) => { x.modules.movement = e.target.checked; })} />
+                        moves particles
+                      </label>
+                      <label className="cond-check">
+                        <input type="checkbox" checked={s.modules.color} onChange={(e) => patchSensor(c.sensor, (x) => { x.modules.color = e.target.checked; })} />
+                        recolor
+                        <input type="color" value={rgbToHex(s.overrideRGB)} onChange={(e) => patchSensor(c.sensor, (x) => { x.overrideRGB = hexToRgb(e.target.value); })} />
+                      </label>
+                    </div>
                   </div>
                 );
               })}
             </div>
-          </section>
 
-          <section className="cond-sec">
-            <h3>Feather reaction — global</h3>
-            <div className="cond-global">
-              <Slider label="Sway" value={g.sway} min={0} max={1} step={0.01} onChange={(v) => patch((c) => { c.preset.global.sway = v; })} />
-              <Slider label="Wing beat" value={g.wingBeat} min={0} max={1} step={0.01} onChange={(v) => patch((c) => { c.preset.global.wingBeat = v; })} />
-              <Slider label="Gravity" value={g.gravity} min={0} max={1} step={0.01} onChange={(v) => patch((c) => { c.preset.global.gravity = v; })} />
-              <Slider label="Motion" value={g.motion} min={0} max={1.5} step={0.01} onChange={(v) => patch((c) => { c.preset.global.motion = v; })} />
-              <Slider label="Ambient drift" value={g.ambient} min={0} max={1} step={0.01} onChange={(v) => patch((c) => { c.preset.global.ambient = v; })} />
-              <Slider label="Audio react" value={g.audioReact} min={0} max={1.5} step={0.01} onChange={(v) => patch((c) => { c.preset.global.audioReact = v; })} />
-              <Slider label="Size" value={g.size} min={20} max={90} step={1} onChange={(v) => patch((c) => { c.preset.global.size = v; })} fmt={(v) => v.toFixed(0)} />
-              <Slider label="Tempo" value={g.bpm} min={60} max={200} step={1} onChange={(v) => patch((c) => { c.preset.global.bpm = v; })} fmt={(v) => `${v.toFixed(0)} bpm`} />
-              <Slider label="Idle fall" value={g.idleFall} min={0} max={30} step={0.5} onChange={(v) => patch((c) => { c.preset.global.idleFall = v; })} fmt={(v) => `${v.toFixed(1)}s`} />
-              <label className="cond-check">
-                <input type="checkbox" checked={g.autoAudio} onChange={(e) => patch((c) => { c.preset.global.autoAudio = e.target.checked; })} />
-                auto audio (loops play + drive layers without triggering)
-              </label>
-              <label className="cond-field cond-scene">
-                <span>Scene</span>
-                <select value={cfg.scene ?? ''} onChange={(e) => patch((c) => { c.scene = e.target.value || undefined; })}>
-                  <option value="">feather default</option>
-                  {Object.values(SCENES).map((sc) => <option key={sc.key} value={sc.key}>{sc.label}</option>)}
-                </select>
-              </label>
+            <div className="cond-video-out">
+              <div className="cond-video-out-head">
+                <span>Video output</span>
+                <span className="cond-preview-audio">{previewAudioOn ? '🔊 audio on' : '🔇 hit Test to enable audio'}</span>
+              </div>
+              <div className="cond-video-out-canvas">
+                <Projection engine={previewEngine} audio={previewAudio} featherId={feather} />
+              </div>
             </div>
-          </section>
-        </main>
+          </div>
+        </section>
       </div>
 
-      <div className="cond-preview">
-        <div className="cond-preview-head">
-          <span>Preview</span>
-          <span className="cond-preview-audio">{previewAudioOn ? '🔊 audio on' : '🔇 hit Test to enable audio'}</span>
-        </div>
-        <div className="cond-preview-canvas">
-          <Projection engine={previewEngine} audio={previewAudio} featherId={feather} />
-        </div>
+      {/* ═══════════ GLOBAL REACTION + PRESETS ═══════════ */}
+      <div className="cond-bottom">
+        <section className="cond-sec cond-global-sec">
+          <h3>Feather reaction — global</h3>
+          <div className="cond-global">
+            <Slider label="Sway" value={g.sway} min={0} max={1} step={0.01} onChange={(v) => patch((c) => { c.preset.global.sway = v; })} />
+            <Slider label="Wing beat" value={g.wingBeat} min={0} max={1} step={0.01} onChange={(v) => patch((c) => { c.preset.global.wingBeat = v; })} />
+            <Slider label="Gravity" value={g.gravity} min={0} max={1} step={0.01} onChange={(v) => patch((c) => { c.preset.global.gravity = v; })} />
+            <Slider label="Motion" value={g.motion} min={0} max={1.5} step={0.01} onChange={(v) => patch((c) => { c.preset.global.motion = v; })} />
+            <Slider label="Ambient drift" value={g.ambient} min={0} max={1} step={0.01} onChange={(v) => patch((c) => { c.preset.global.ambient = v; })} />
+            <Slider label="Audio react" value={g.audioReact} min={0} max={1.5} step={0.01} onChange={(v) => patch((c) => { c.preset.global.audioReact = v; })} />
+            <Slider label="Size" value={g.size} min={20} max={90} step={1} onChange={(v) => patch((c) => { c.preset.global.size = v; })} fmt={(v) => v.toFixed(0)} />
+            <Slider label="Tempo" value={g.bpm} min={60} max={200} step={1} onChange={(v) => patch((c) => { c.preset.global.bpm = v; })} fmt={(v) => `${v.toFixed(0)} bpm`} />
+            <Slider label="Idle fall" value={g.idleFall} min={0} max={30} step={0.5} onChange={(v) => patch((c) => { c.preset.global.idleFall = v; })} fmt={(v) => `${v.toFixed(1)}s`} />
+            <label className="cond-check">
+              <input type="checkbox" checked={g.autoAudio} onChange={(e) => patch((c) => { c.preset.global.autoAudio = e.target.checked; })} />
+              auto audio (loops play + drive layers without triggering)
+            </label>
+            <label className="cond-field cond-scene">
+              <span>Scene</span>
+              <select value={cfg.scene ?? ''} onChange={(e) => patch((c) => { c.scene = e.target.value || undefined; })}>
+                <option value="">feather default</option>
+                {Object.values(SCENES).map((sc) => <option key={sc.key} value={sc.key}>{sc.label}</option>)}
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section className="cond-sec cond-presets-sec">
+          <h3>Presets · {featherLabel}</h3>
+          <div className="cond-preset-save">
+            <input className="wb-input" placeholder="preset name" value={presetName} onChange={(e) => setPresetName(e.target.value)} />
+            <button className="wb-btn" disabled={busy} onClick={() => void doSavePreset()}>save</button>
+          </div>
+          <div className="cond-presets">
+            {featherPresets.length === 0 && <div className="cond-empty">no presets for this feather yet</div>}
+            {featherPresets.map((p) => (
+              <div key={p.id} className="cond-preset">
+                <span className="cond-preset-name" title={new Date(p.updated_at).toLocaleString()}>{p.name}</span>
+                <button className="wb-btn" onClick={() => { setCfg(clone(p.config)); setPresetName(p.name); setStatus(`loaded "${p.name}"`); }}>load</button>
+                <button className="wb-btn" onClick={() => { setCfg(clone(p.config)); setPresetName(p.name); void pushLive(feather, p.config, p.id).then(() => setStatus(`pushed "${p.name}" live ✓`)).catch((e) => setStatus(String(e))); }}>push</button>
+                <button className="cond-x" onClick={() => { if (confirm(`Delete preset "${p.name}"?`)) void deleteCloudPreset(p.id).then(refreshPresets); }}>✕</button>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   );
