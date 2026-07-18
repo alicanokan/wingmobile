@@ -465,7 +465,7 @@ const PART_DARK = 0.12;
 //   uDisperse phase 4 — all 5 active → the piece flies across the whole screen
 const PART_VERT = /* glsl */ `
   uniform float uTime, uBase, uBloom, uSize, uPattern, uAudioMix, uDisperse;
-  uniform float uSway, uDisperseDist, uAudioReact, uStability, uGravity, uMotion, uWingBend, uRelief, uFall, uAudioColor, uDensityScale;
+  uniform float uSway, uDisperseDist, uAudioReact, uStability, uGravity, uMotion, uWingBend, uRelief, uFall, uAudioColor, uDensityScale, uAmbient;
   // per-sensor rig (routing + movement + color)
   uniform float uEnergy[${NCH}];
   uniform float uPump[${NCH}];    // accumulated "balloon" activation per sensor
@@ -563,6 +563,14 @@ const PART_VERT = /* glsl */ `
       tint = mix(tint, uPulseColor, ac * 0.7);
       glow += infl + ac;
     }
+    // AMBIENT — a small always-on drift so the point cloud breathes even at
+    // rest instead of freezing solid; each particle gets its own slow phase
+    // from aSeed so the cloud feels alive rather than pulsing in lockstep.
+    disp += vec3(
+      sin(uTime*0.35 + aSeed*17.0),
+      sin(uTime*0.27 + aSeed*23.0 + 1.7),
+      sin(uTime*0.31 + aSeed*11.0 + 3.1)
+    ) * uAmbient * 0.35;
     // per-layer PULSE: lrev is the layer's charge level (ramps in JS at the
     // layer's gen speed and restarts on every trigger). The charge FRONT travels
     // calamus → rachis → barbs along aGrow, so each wing-beat is a wave that
@@ -732,6 +740,7 @@ function buildParticles(img: HTMLImageElement, palette: number[][], layers: Laye
       uStability: { value: DEFAULT_GLOBAL.stability },
       uGravity: { value: DEFAULT_GLOBAL.gravity },
       uMotion: { value: DEFAULT_GLOBAL.motion },
+      uAmbient: { value: DEFAULT_GLOBAL.ambient },
       uWingBend: { value: 0 },
       uRelief: { value: DEFAULT_GLOBAL.relief },
       uFall: { value: 0 },
@@ -910,6 +919,7 @@ function ImageFeather({
     u.uStability.value = g.stability;
     u.uGravity.value = g.gravity;
     u.uMotion.value = g.motion;
+    u.uAmbient.value = g.ambient;
     u.uSize.value = g.size * DEVICE_SIZE_SCALE;
     // WING-BEAT swing amplitude grows with total activation (all-5 → rachis swings most)
     const wingTarget = Math.min(1, totalAir / 4) * g.wingBeat;

@@ -92,6 +92,8 @@ export interface RoutingState {
   /** Level a key press produces (0..1) and its envelope release in seconds. */
   keyAmount: number;
   keyRelease: number;
+  /** Per-device (dev1..dev5) noise floor 0..1 — incoming level below this reads as 0. */
+  deviceThresholds: number[];
 }
 
 export function loadRouting(): RoutingState {
@@ -101,6 +103,7 @@ export function loadRouting(): RoutingState {
     keys: defaultKeyMap(),
     keyAmount: 1,
     keyRelease: 0.25,
+    deviceThresholds: Array(DEVICE_COUNT).fill(0),
   };
   try {
     const raw = localStorage.getItem(STORE_KEY);
@@ -113,6 +116,11 @@ export function loadRouting(): RoutingState {
     }
     if (typeof saved.keyAmount === 'number') base.keyAmount = saved.keyAmount;
     if (typeof saved.keyRelease === 'number') base.keyRelease = saved.keyRelease;
+    if (Array.isArray(saved.deviceThresholds)) {
+      for (let i = 0; i < DEVICE_COUNT; i++) {
+        if (typeof saved.deviceThresholds[i] === 'number') base.deviceThresholds[i] = saved.deviceThresholds[i];
+      }
+    }
   } catch {
     /* ignore malformed storage */
   }

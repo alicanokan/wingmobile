@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import type { LinkStatus } from '../net/link.ts';
 import type { SourceKind } from './inputs.ts';
+import { Knob } from './Knob.tsx';
 
 interface DeviceInfo {
   deviceId: string;
@@ -23,9 +24,12 @@ interface Props {
   levels: Partial<Record<SourceKind, number>>;
   log: string[];
   onClose: () => void;
+  /** Per-device noise floor 0..1 (below this, incoming level reads as 0). */
+  thresholds?: number[];
+  onThresholdChange?: (index: number, v: number) => void;
 }
 
-function DeviceCard({ index, info, status, peers, level }: { index: number; info: DeviceInfo | null; status: LinkStatus; peers: number; level: number }) {
+function DeviceCard({ index, info, status, peers, level, threshold, onThresholdChange }: { index: number; info: DeviceInfo | null; status: LinkStatus; peers: number; level: number; threshold: number; onThresholdChange?: (index: number, v: number) => void }) {
   const [qr, setQr] = useState('');
   // QR open by default on desktop; collapsed on phones to keep the panel compact.
   const [show, setShow] = useState(() => typeof window === 'undefined' || window.innerWidth > 820);
@@ -71,6 +75,22 @@ function DeviceCard({ index, info, status, peers, level }: { index: number; info
         <span className="wb-level-val">{level.toFixed(2)}</span>
       </div>
 
+      {onThresholdChange && (
+        <div className="wb-knob-row" style={{ marginTop: 4 }}>
+          <Knob
+            label="Thresh"
+            value={threshold}
+            min={0}
+            max={0.9}
+            step={0.02}
+            reset={0}
+            onChange={(v) => onThresholdChange(index, v)}
+            format={(v) => v.toFixed(2)}
+            size={36}
+          />
+        </div>
+      )}
+
       {show && qr && <img className="wb-dev-qr" src={qr} alt={`pair device ${index + 1}`} />}
       {show && url && <div className="wb-phone-url">{url}</div>}
     </div>
@@ -101,8 +121,9 @@ export function DeviceHud({ peers, levels, onOpen }: { peers: number[]; levels: 
   );
 }
 
-export function DevicesPanel({ devices, statuses, peers, levels, log, onClose }: Props) {
+export function DevicesPanel({ devices, statuses, peers, levels, log, onClose, thresholds, onThresholdChange }: Props) {
   const n = devices.length;
+  const onLocalhost = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
   return (
     <div className="wb-motion wb-devices">
       <div className="wb-settings-head">
@@ -114,11 +135,26 @@ export function DevicesPanel({ devices, statuses, peers, levels, log, onClose }:
 
       <div className="wb-settings-note">
         Pair up to {n} phones — each gets its own <b>Device ID + Code</b> and its own source <b>D1–D{n}</b>. Watch each one's live level below, then route
-        <b> D1–D{n}</b> onto sensors in the Routing matrix.
+        <b> D1–D{n}</b> onto sensors in the Routing matrix. <b>Thresh</b> ignores jitter below that level (a phone lying still).
       </div>
 
+      {onLocalhost && (
+        <div className="wb-settings-note" style={{ color: '#e0b060', borderColor: '#3a2f16', background: '#161206' }}>
+          You're on <b>localhost</b> — a phone on the QR can't reach that. Open the console on your <b>Network URL</b> (the LAN IP Vite prints, e.g. http://192.168.x.x:5199) so the QR points somewhere phones can actually connect.
+        </div>
+      )}
+
       {devices.map((info, i) => (
-        <DeviceCard key={i} index={i} info={info} status={statuses[i] ?? 'idle'} peers={peers[i] ?? 0} level={levels[`dev${i + 1}` as SourceKind] ?? 0} />
+        <DeviceCard
+          key={i}
+          index={i}
+          info={info}
+          status={statuses[i] ?? 'idle'}
+          peers={peers[i] ?? 0}
+          level={levels[`dev${i + 1}` as SourceKind] ?? 0}
+          threshold={thresholds?.[i] ?? 0}
+          onThresholdChange={onThresholdChange}
+        />
       ))}
 
       <details className="wb-log-box">

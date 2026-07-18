@@ -29,6 +29,7 @@ import { DevicesPanel, DeviceHud } from './DevicesPanel.tsx';
 import { Landing, type EntryMode } from './Landing.tsx';
 import { MobileMenu } from './MobileMenu.tsx';
 import { startHost, type HostHandle, type LinkStatus } from '../net/link.ts';
+import { useConductorSync } from '../net/liveSync.ts';
 import { SettingsPanel } from './SettingsPanel.tsx';
 import { RigPanel } from './RigPanel.tsx';
 import { MicSource } from './mic.ts';
@@ -119,7 +120,7 @@ export default function App() {
   const [featherOpen, setFeatherOpen] = useState(false);
 
   // Input routing — source→slot, slot→part(s), slot→key, persisted (see inputs.ts).
-  const [{ sources, parts, keys, keyAmount, keyRelease }, setRouting] = useState(() => loadRouting());
+  const [{ sources, parts, keys, keyAmount, keyRelease, deviceThresholds }, setRouting] = useState(() => loadRouting());
   const setKeyAmount = (v: number) =>
     setRouting((r) => {
       const next = { ...r, keyAmount: v };
@@ -143,6 +144,14 @@ export default function App() {
       const cur = r.parts[slot] ?? [];
       const linked = cur.includes(part) ? cur.filter((p) => p !== part) : [...cur, part];
       const next = { ...r, parts: { ...r.parts, [slot]: linked } };
+      saveRouting(next);
+      return next;
+    });
+  const setDeviceThreshold = (i: number, v: number) =>
+    setRouting((r) => {
+      const arr = r.deviceThresholds.slice();
+      arr[i] = v;
+      const next = { ...r, deviceThresholds: arr };
       saveRouting(next);
       return next;
     });
@@ -281,6 +290,9 @@ export default function App() {
   const keyReleaseRef = useRef(keyRelease);
   keyAmountRef.current = keyAmount;
   keyReleaseRef.current = keyRelease;
+  // Per-device noise floor, read in the router loop (avoids re-binding it on every drag).
+  const deviceThresholdsRef = useRef(deviceThresholds);
+  deviceThresholdsRef.current = deviceThresholds;
   // Live letter → slot reverse map, read by the keyboard handler (avoids
   // re-binding the listener — and resetting the F toggle — on every remap).
   const keyToSlotRef = useRef<Record<string, string>>({});
@@ -304,6 +316,11 @@ export default function App() {
   };
 
   const snapshot = useEngineSnapshot(engine);
+
+  // Conductor: apply live pushes from /conductor (rig, feather, scene, loop
+  // samples) — the conductor page drives every connected device through the
+  // shared cloud database.
+  useConductorSync({ engine, audio, onFeather: chooseFeather });
 
   // Shared input devices — one each, read by the central router (and tuned by
   // their panels). They start when routed to a sensor or opened for tuning.
@@ -434,7 +451,12 @@ export default function App() {
         let v = 0;
         if (src === 'mic') v = mic.active ? micLvl : 0;
         else if (src === 'camera') v = cam.active ? camLvl : 0;
-        else if (isDeviceKey(src)) v = deviceMotion.current[deviceIndex(src)] ?? 0;
+        else if (isDeviceKey(src)) {
+          const di = deviceIndex(src);
+          const raw = deviceMotion.current[di] ?? 0;
+          const thr = deviceThresholdsRef.current[di] ?? 0;
+          v = thr > 0 ? Math.max(0, (raw - thr) / (1 - thr)) : raw;
+        }
         else if (src === 'key') {
           // pulse envelope: instant attack to AMOUNT, exp release over RELEASE.
           const target = (keyLevels.current[slot.id] ?? 0) * keyAmountRef.current;
@@ -457,7 +479,9 @@ export default function App() {
       }
 
       for (const p of PARTS) {
-        const v = partVal[p.id] ?? 0;
+        // per-sensor sensitivity from the rig (set in the Rig panel / Conductor)
+        const sens = rig.sensors[p.id]?.sensitivity ?? 1;
+        const v = Math.min(1, (partVal[p.id] ?? 0) * sens);
         if (v > 0.001) {
           sim.holdWind(p.id, v);
           sim.setPresence(p.id, v > 0.05);
@@ -809,7 +833,7 @@ export default function App() {
 
         <div className="wb-panels">
           {showPair && (
-            <DevicesPanel devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} />
+            <DevicesPanel devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} thresholds={deviceThresholds} onThresholdChange={setDeviceThreshold} />
           )}
           {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} compact={entryMode === 'mobile'} />}
         </div>
@@ -981,6 +1005,13 @@ export default function App() {
           >
             ↗ Feather window
           </button>
+          <button
+            className="wb-btn"
+            onClick={() => window.open('/conductor', '_blank')}
+            title="Conductor — samples, sensor routing & presets for the whole installation"
+          >
+            🎼 Conductor
+          </button>
           <div className="wb-rail-feather">{featherLabel}</div>
         </div>
       </aside>
@@ -1021,6 +1052,8 @@ export default function App() {
           levels={levels}
           log={linkLog}
           onClose={() => setShowPair(false)}
+          thresholds={deviceThresholds}
+          onThresholdChange={setDeviceThreshold}
         />
       )}
       {showScene && <ScenePanel snapshot={snapshot} engine={engine} audio={audio} onClose={() => setShowScene(false)} />}
@@ -1099,7 +1132,7 @@ export default function App() {
             </div>
           )}
           {showPair && (
-            <DevicesPanel devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} />
+            <DevicesPanel devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} thresholds={deviceThresholds} onThresholdChange={setDeviceThreshold} />
           )}
           <Projection engine={engine} audio={audio} featherId={feather} paused={featherOpen} />
         </div>

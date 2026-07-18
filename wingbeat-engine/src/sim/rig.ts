@@ -78,6 +78,7 @@ export interface SensorRig {
   overrideRGB: [number, number, number];
   layers: number[]; // indices into the combined layer list
   loopSample?: string; // name of a loaded loop sample (synced, launched on activity)
+  sensitivity?: number; // input gain 0.2..3 applied to this sensor's incoming level (1 = neutral)
 }
 
 export interface GlobalRig {
@@ -94,6 +95,7 @@ export interface GlobalRig {
   hold: number; // layer-visibility hold: 0 fades back to contour … 1 latches layers on
   pulseColor: [number, number, number]; // color of the beat-pulse wave that sweeps each layer
   motion: number; // master motion scale: 0 freezes particles onto the perfect image
+  ambient: number; // always-on per-particle drift (0 = frozen when idle, 1 = restless point cloud)
   floatTime: number; // seconds the "air" floats after a pump before it starts to sink
   relief: number; // 3D relief depth of the photo plane (brightness → toward viewer)
   wingBeat: number; // whole-feather swing anchored at the calamus; grows with activation
@@ -116,34 +118,9 @@ export interface FeatherPreset {
   updatedAt?: number;
 }
 
-function getDefaultGlobal(): GlobalRig {
-  const baseDefaults: GlobalRig = { sway: 0.35, disperse: 0.4, audioReact: 0.8, size: 55, stability: 0.85, attack: 0.15, release: 0.08, amount: 1, bpm: 120, gravity: 0.45, hold: 0, pulseColor: [1, 0.85, 0.5], motion: 1, floatTime: 1.4, relief: 0.7, wingBeat: 0.6, audioColor: 0.7, autoAudio: false, idleFall: 5 };
-
-  // Reduce default particle density and size on old devices for better performance
-  if (DEVICE_TIER === 'ultra-low') {
-    return { ...baseDefaults, amount: 0.3, size: 35, motion: 0.8, audioReact: 0.6 };
-  }
-  if (DEVICE_TIER === 'low') {
-    return { ...baseDefaults, amount: 0.5, size: 45, motion: 0.9 };
-  }
-  if (DEVICE_TIER === 'mid') {
-    return { ...baseDefaults, amount: 0.8, size: 50 };
-  }
-
-  return baseDefaults;
-}
-
-export const DEFAULT_GLOBAL: GlobalRig = getDefaultGlobal();
-
-// particle sampling width derived from the amount (capped to protect the GPU).
-// Higher = the particles reconstruct the image at finer detail. The point size
-// auto-scales down with width (see uDensityScale) so density adds detail, not mush.
-export const PART_W_MIN = 150;
-export const PART_W_MAX = 1400;
-export const PART_W_REF = 205; // reference width at which point size == the slider value
-
 // Device capability detection for adaptive particle optimization.
 // Detects device tier (low-end, mid-range, high-end) and applies appropriate limits.
+// (Declared BEFORE getDefaultGlobal, which reads DEVICE_TIER at module init.)
 function detectDeviceTier(): 'ultra-low' | 'low' | 'mid' | 'high' {
   if (typeof navigator === 'undefined' || typeof window === 'undefined') return 'high';
 
@@ -174,6 +151,32 @@ function detectDeviceTier(): 'ultra-low' | 'low' | 'mid' | 'high' {
 export const DEVICE_TIER = detectDeviceTier();
 export const IS_LOW_POWER = DEVICE_TIER === 'low' || DEVICE_TIER === 'ultra-low';
 export const IS_ULTRA_LOW = DEVICE_TIER === 'ultra-low';
+
+function getDefaultGlobal(): GlobalRig {
+  const baseDefaults: GlobalRig = { sway: 0.35, disperse: 0.4, audioReact: 0.8, size: 55, stability: 0.85, attack: 0.15, release: 0.08, amount: 1, bpm: 120, gravity: 0.45, hold: 0, pulseColor: [1, 0.85, 0.5], motion: 1, ambient: 0.18, floatTime: 1.4, relief: 0.7, wingBeat: 0.6, audioColor: 0.7, autoAudio: false, idleFall: 5 };
+
+  // Reduce default particle density and size on old devices for better performance
+  if (DEVICE_TIER === 'ultra-low') {
+    return { ...baseDefaults, amount: 0.3, size: 35, motion: 0.8, audioReact: 0.6 };
+  }
+  if (DEVICE_TIER === 'low') {
+    return { ...baseDefaults, amount: 0.5, size: 45, motion: 0.9 };
+  }
+  if (DEVICE_TIER === 'mid') {
+    return { ...baseDefaults, amount: 0.8, size: 50 };
+  }
+
+  return baseDefaults;
+}
+
+export const DEFAULT_GLOBAL: GlobalRig = getDefaultGlobal();
+
+// particle sampling width derived from the amount (capped to protect the GPU).
+// Higher = the particles reconstruct the image at finer detail. The point size
+// auto-scales down with width (see uDensityScale) so density adds detail, not mush.
+export const PART_W_MIN = 150;
+export const PART_W_MAX = 1400;
+export const PART_W_REF = 205; // reference width at which point size == the slider value
 
 /** Ceiling applied to `amount` on this device. */
 export const DEVICE_AMOUNT_CAP =
@@ -209,6 +212,7 @@ export function defaultSensorRig(sensorId: string): SensorRig {
     colorOverride: false,
     overrideRGB: [1, 0.8, 0.3],
     layers: idx >= 0 ? [idx % 4] : [], // a sensible unique-ish default routing
+    sensitivity: 1,
   };
 }
 

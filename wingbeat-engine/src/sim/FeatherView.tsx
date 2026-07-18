@@ -16,6 +16,7 @@ import { Projection } from './Projection.tsx';
 import { DEFAULT_FEATHER } from './feathers.ts';
 import { loadIntoRig, notifyLayersChange } from './rig.ts';
 import { createReceiver, presenceSend } from './sync.ts';
+import { useConductorSync } from '../net/liveSync.ts';
 
 export default function FeatherView() {
   const engine = useMemo(() => new WingbeatEngine(), []);
@@ -24,6 +25,10 @@ export default function FeatherView() {
   const [waiting, setWaiting] = useState(true);
   const [isFull, setIsFull] = useState(false);
   const layerKey = useRef(''); // last applied layer config, to gate rebuilds
+
+  // Conductor pushes reach remote displays too (a console on the same machine
+  // mirrors the same state over the sync channel anyway — they agree).
+  useConductorSync({ engine, audio, onFeather: setFeather });
 
   // Tell the console we're open (so it pauses its own projection). Ping while
   // alive; say goodbye on close so the console resumes promptly.

@@ -335,15 +335,20 @@ export class AudioEngine {
   }
 
   async loadLoopSample(sensorId: string, file: File): Promise<void> {
+    return this.loadLoopBuffer(sensorId, await file.arrayBuffer(), file.name);
+  }
+
+  /** Same as loadLoopSample but from raw bytes — used by the conductor cloud
+   *  sync, which downloads samples from the shared library. */
+  async loadLoopBuffer(sensorId: string, buf: ArrayBuffer, label = 'sample'): Promise<void> {
     if (!this.ready) await this.init(this.masterGainValue);
     await this.resume();
     this.ensureTransport();
-    const buf = await file.arrayBuffer();
     let ab: AudioBuffer;
     try {
       ab = await Tone.getContext().rawContext.decodeAudioData(buf.slice(0));
     } catch {
-      throw new Error(`Couldn't decode "${file.name}". Try a .wav / .mp3 / .ogg file.`);
+      throw new Error(`Couldn't decode "${label}". Try a .wav / .mp3 / .ogg file.`);
     }
     this.clearLoop(sensorId);
     const master = (this.master ?? Tone.getDestination()) as Tone.ToneAudioNode;

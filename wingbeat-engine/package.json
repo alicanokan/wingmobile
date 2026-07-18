@@ -13,6 +13,7 @@
   "dependencies": {
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
+    "@supabase/supabase-js": "^2.110.0",
     "mqtt": "^5.10.1",
     "peerjs": "^1.5.5",
     "qrcode": "^1.5.4",

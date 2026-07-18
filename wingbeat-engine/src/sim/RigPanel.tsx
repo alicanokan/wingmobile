@@ -195,6 +195,7 @@ export function RigPanel({ snapshot, audio, onClose }: { snapshot: EngineSnapsho
       <Slider label="Relief (3D depth)" value={rig.global.relief} min={0} max={2.5} step={0.01} onChange={(v) => { rig.global.relief = v; rr(); }} />
       <Slider label="Wing-beat (swing)" value={rig.global.wingBeat} min={0} max={2} step={0.01} onChange={(v) => { rig.global.wingBeat = v; rr(); }} />
       <Slider label="Idle sway" value={rig.global.sway} min={0} max={1.5} step={0.01} onChange={(v) => { rig.global.sway = v; rr(); }} />
+      <Slider label="Ambient drift" value={rig.global.ambient} min={0} max={1} step={0.01} onChange={(v) => { rig.global.ambient = v; rr(); }} />
       <Slider label="Spread (all-5)" value={rig.global.disperse} min={0} max={3} step={0.01} onChange={(v) => { rig.global.disperse = v; rr(); }} />
       <Slider label="Audio react" value={rig.global.audioReact} min={0} max={2} step={0.01} onChange={(v) => { rig.global.audioReact = v; rr(); }} />
       <Slider label="Audio → color" value={rig.global.audioColor} min={0} max={1.5} step={0.01} onChange={(v) => { rig.global.audioColor = v; rr(); }} />

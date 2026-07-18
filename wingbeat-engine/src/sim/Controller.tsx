@@ -101,6 +101,9 @@ export default function Controller() {
   };
 
   const [tilt, setTilt] = useState(false); // accelerometer on
+  const [tiltThreshold, setTiltThreshold] = useState(1); // m/s^2 of shake ignored as noise
+  const tiltThresholdRef = useRef(tiltThreshold);
+  tiltThresholdRef.current = tiltThreshold;
 
   // --- Camera (optional): on-device motion detection → motion. Runs the SAME
   //     detector as the console's camera theremin, on the phone, and streams
@@ -181,7 +184,9 @@ export default function Controller() {
       const a = e.accelerationIncludingGravity;
       if (!a) return;
       const mag = Math.hypot(a.x ?? 0, a.y ?? 0, a.z ?? 0);
-      const v = clamp01((Math.abs(mag - 9.8) - 1) / 14); // gate gravity, scale
+      // gate gravity, then a user-adjustable deadzone before scaling to 0..1
+      const thr = tiltThresholdRef.current;
+      const v = clamp01((Math.abs(mag - 9.8) - thr) / Math.max(1, 15 - thr));
       const now = performance.now();
       if (now - last < 40) return;
       last = now;
@@ -281,6 +286,24 @@ export default function Controller() {
           {camOn ? '✓ camera on' : 'Use camera'}
         </button>
       </div>
+
+      {tilt && (
+        <div className="wb-ctl-section">
+          <div className="wb-ctl-slider-head">
+            <span className="wb-label">Shake threshold</span>
+            <span className="wb-motion-val">{tiltThreshold.toFixed(1)}</span>
+          </div>
+          <input
+            className="wb-ctl-slider"
+            type="range"
+            min={0}
+            max={8}
+            step={0.5}
+            value={tiltThreshold}
+            onChange={(e) => setTiltThreshold(Number(e.target.value))}
+          />
+        </div>
+      )}
 
       <div className="wb-ctl-section">
         <div className="wb-label">Scene</div>
