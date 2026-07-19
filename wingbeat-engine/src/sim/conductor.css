@@ -738,3 +738,29 @@
 .cond-light .cond-audioin-val { color: #2266aa; }
 .cond-light .cond-pulsegrp { background: #fbfaf6; border-color: #e2e0d8; border-left-color: #34c46e; }
 .cond-light .cond-pulsegrp-head { color: #1f8a4c; }
+
+/* Pulse + Hold sit together: one puffs air in, the other clamps it at full. */
+.cond-pulse-group { display: flex; align-items: center; gap: 5px; }
+.cond-hold {
+  border: 1px solid #26263a;
+  background: #14141f;
+  color: #71718a;
+  border-radius: 20px;
+  padding: 2px 9px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.cond-hold:hover { border-color: #e8c56a88; color: #e8c56a; }
+.cond-hold.on {
+  background: #e8c56a; border-color: #e8c56a; color: #221a06; font-weight: 600;
+  box-shadow: 0 0 8px #e8c56a55;
+}
+.cond-light .cond-hold { background: #fff; border-color: #d8d6cc; color: #75758a; }
+.cond-light .cond-hold:hover { border-color: #b8860b88; color: #8a5f00; }
+.cond-light .cond-hold.on {
+  background: #b8860b; border-color: #b8860b; color: #fff;
+  box-shadow: 0 0 8px #b8860b44;
+}

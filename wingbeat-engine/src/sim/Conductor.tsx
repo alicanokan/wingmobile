@@ -218,6 +218,9 @@ export default function Conductor() {
   const previewSim = useMemo(() => new SimTransport(), []);
   const [previewAudioOn, setPreviewAudioOn] = useState(false);
   const [testingSensors, setTestingSensors] = useState<Set<string>>(new Set());
+  /** Parts pinned to full air — a bench clamp for testing, so you can set EQ and
+   *  reaction against a steady 1.0 instead of re-pulsing every few seconds. */
+  const [heldSensors, setHeldSensors] = useState<Set<string>>(new Set());
   const [eqOpen, setEqOpen] = useState<Set<string>>(new Set());
   const toggleEq = (sensorId: string) =>
     setEqOpen((s) => {
@@ -321,8 +324,10 @@ export default function Conductor() {
         const atk = s?.attack ?? 0.15;
         const rel = s?.release ?? 0.08;
 
-        let tgt = airTarget.current[id] ?? 0;
-        if (tgt > 0) tgt = Math.max(0, tgt - dt * (0.2 + rel * 5)); // leak
+        // HOLD clamps the target at full air: the leak is suspended, so the part
+        // rises at its Attack and then just sits there until you switch it off.
+        let tgt = heldSensors.has(id) ? 1 : (airTarget.current[id] ?? 0);
+        if (!heldSensors.has(id) && tgt > 0) tgt = Math.max(0, tgt - dt * (0.2 + rel * 5)); // leak
         airTarget.current[id] = tgt;
 
         const lvl = airLevel.current[id] ?? 0;
@@ -359,7 +364,7 @@ export default function Conductor() {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [cfg, testingSensors, previewSim, previewAudio]);
+  }, [cfg, testingSensors, heldSensors, previewSim, previewAudio]);
 
   /** Stop monitoring a channel. The loop keeps running and being analysed (the
    *  audio input carries on arriving); it just stops being audible. Nothing to
@@ -429,6 +434,26 @@ export default function Conductor() {
       const puff = 0.4 * Math.min(1.5, sens); // Sensitivity = air per pulse
       airTarget.current[sensorId] = Math.min(1, (airTarget.current[sensorId] ?? 0) + puff);
       // the envelope loop takes it from here: inflate at Attack, leak at Release
+    } catch (e) {
+      setStatus(String(e));
+    }
+  };
+
+  /** HOLD = clamp this part at full air until switched off, so you can tune EQ
+   *  and reaction against a steady signal instead of chasing a decaying pulse.
+   *  Releasing hands the part straight back to the normal leak. */
+  const toggleHold = async (sensorId: string) => {
+    if (heldSensors.has(sensorId)) {
+      setHeldSensors((s) => {
+        const n = new Set(s);
+        n.delete(sensorId);
+        return n;
+      });
+      return;
+    }
+    try {
+      await ensureLoop(sensorId); // held air has to be able to make sound
+      setHeldSensors((s) => new Set(s).add(sensorId));
     } catch (e) {
       setStatus(String(e));
     }
@@ -807,9 +832,19 @@ export default function Conductor() {
                         <b>{c.label}</b>
                         <span className="cond-sensor-sub">{c.sensor} · {c.kind}</span>
                       </div>
-                      <button className="cond-pulse" onClick={() => void pulseSensor(c.sensor)} title="Pump this part like a balloon — pulses stack, then the air leaks out">
-                        ● Pulse
-                      </button>
+                      <div className="cond-pulse-group">
+                        <button className="cond-pulse" onClick={() => void pulseSensor(c.sensor)} title="Pump this part like a balloon — pulses stack, then the air leaks out">
+                          ● Pulse
+                        </button>
+                        <button
+                          className={`cond-hold ${heldSensors.has(c.sensor) ? 'on' : ''}`}
+                          onClick={() => void toggleHold(c.sensor)}
+                          title="Hold this part at full air (1.0) so you can tune against a steady signal"
+                          aria-pressed={heldSensors.has(c.sensor)}
+                        >
+                          HOLD
+                        </button>
+                      </div>
                     </div>
 
                     <AirMeter airRef={airLevel} sensorId={c.sensor} />
