@@ -52,6 +52,35 @@ export interface ConductorSyncOpts {
   onFeather?: (id: string) => void;
 }
 
+/** Apply a conductor config to a local engine+audio pair — the same steps a
+ *  live push runs, callable directly (e.g. picking a saved preset on
+ *  /experience). If audio isn't unlocked yet the loops are prefetched and
+ *  installed the moment the engine reports audioReady. */
+export function applyConductorConfig(
+  engine: WingbeatEngine,
+  audio: AudioEngine,
+  cfg: ConductorConfig,
+  onFeather?: (id: string) => void,
+): void {
+  const preset = cfg.preset;
+  if (!preset) return;
+  loadIntoRig(preset);
+  if (preset.feather) saveLast(preset.feather);
+  audio.setBpm(preset.global?.bpm ?? 120);
+  if (cfg.scene) engine.setScene(cfg.scene);
+  if (preset.feather) onFeather?.(preset.feather);
+  notifyLayersChange();
+  if (audio.ready) {
+    void applyLoops(cfg, audio);
+  } else {
+    prefetch(cfg);
+    const off = engine.on('audioReady', () => {
+      off();
+      void applyLoops(cfg, audio);
+    });
+  }
+}
+
 export function useConductorSync({ engine, audio, onFeather }: ConductorSyncOpts): void {
   // Refs so the subscription effect doesn't rebind on each render.
   const onFeatherRef = useRef(onFeather);

@@ -42,6 +42,11 @@ export function Landing({ onPick }: { onPick: (m: EntryMode) => void }) {
           Mobile experience
           <small>compact · live meters</small>
         </button>
+        <button className="wb-landing-btn" onClick={() => (location.href = '/experience')}>
+          <span className="wb-landing-glyph">✳</span>
+          Experience
+          <small>presets · phone control · mix</small>
+        </button>
       </div>
     </div>
   );

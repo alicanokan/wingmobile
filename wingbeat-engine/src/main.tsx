@@ -5,11 +5,13 @@ import FeatherView from './sim/FeatherView.tsx';
 import CamSender from './sim/CamSender.tsx';
 import Controller from './sim/Controller.tsx';
 import Conductor from './sim/Conductor.tsx';
+import Experience from './sim/Experience.tsx';
 
 // Entry points on one app: the operator console (/), a display-only projection
 // (/feather) for a second screen, a phone camera sender (/cam), a phone
-// remote controller (/controller), and the conductor preset generator
-// (/conductor) that drives every connected device — all joined by QR.
+// remote controller (/controller), the conductor preset generator (/conductor)
+// that drives every connected device, and the distilled front-of-house page
+// (/experience) — all joined by QR.
 const path = window.location.pathname.replace(/\/+$/, '');
 
 createRoot(document.getElementById('root')!).render(
@@ -21,6 +23,8 @@ createRoot(document.getElementById('root')!).render(
     <Controller />
   ) : path.endsWith('/conductor') ? (
     <Conductor />
+  ) : path.endsWith('/experience') ? (
+    <Experience />
   ) : (
     <StrictMode>
       <App />

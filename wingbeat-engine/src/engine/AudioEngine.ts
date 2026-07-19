@@ -80,7 +80,11 @@ export class AudioEngine {
   // runs continuously (phase-aligned to a shared transport so they stay in sync);
   // its GAIN rises when the sensor is triggered, and its METER feeds that layer's
   // audio-reactivity, so each visual layer moves to its own loop's sound.
-  private loops = new Map<string, { player: Tone.Player; gain: Tone.Gain; meter: Tone.Meter; fft: Tone.FFT; target: number }>();
+  private loops = new Map<string, { player: Tone.Player; gain: Tone.Gain; fader: Tone.Gain; meter: Tone.Meter; fft: Tone.FFT; target: number; name: string }>();
+  // Per-sensor CHANNEL STRIP for the loop players: the operator's fader + mute,
+  // multiplying the trigger gain. Kept outside `loops` so a conductor push that
+  // reloads a sample doesn't reset the level someone just set on the desk.
+  private loopMix = new Map<string, { gain: number; mute: boolean }>();
   private transportOn = false;
   bpm = 120;
 
@@ -352,16 +356,19 @@ export class AudioEngine {
     }
     this.clearLoop(sensorId);
     const master = (this.master ?? Tone.getDestination()) as Tone.ToneAudioNode;
-    const gain = new Tone.Gain(0).connect(master);    // audible path, silent until triggered
+    const strip = this.loopMix.get(sensorId) ?? { gain: 0.8, mute: false };
+    this.loopMix.set(sensorId, strip);
+    const fader = new Tone.Gain(strip.mute ? 0 : strip.gain).connect(master); // operator fader
+    const gain = new Tone.Gain(0).connect(fader);     // trigger gate, silent until triggered
     const meter = new Tone.Meter({ normalRange: true, smoothing: 0.8 });
     const fft = new Tone.FFT({ size: 256, smoothing: 0.8 }); // EQ bands for routing + the visual EQ editor
     const player = new Tone.Player(ab);
     player.loop = true;
-    player.connect(gain);                             // → master (gated by trigger volume)
+    player.connect(gain);                             // → fader → master
     player.connect(meter);                            // RAW loop level → always analysed,
     player.connect(fft);                              // RAW spectrum → low/mid/high bands,
     //   so the layer reacts to the loop's sound even before its volume is up.
-    this.loops.set(sensorId, { player, gain, meter, fft, target: 0 });
+    this.loops.set(sensorId, { player, gain, fader, meter, fft, target: 0, name: label });
     // start looping right away so it's instantly audible (when triggered) AND being
     // analysed; sync stays tight because all loops share the transport tempo.
     try {
@@ -376,6 +383,7 @@ export class AudioEngine {
       try { l.player.stop(); } catch { /* not started */ }
       l.player.dispose();
       l.gain.dispose();
+      l.fader.dispose();
       l.meter.dispose();
       l.fft.dispose();
     }
@@ -393,6 +401,44 @@ export class AudioEngine {
     l.target = g;
     l.gain.gain.rampTo(g, 0.12);
   }
+  // ---- loop channel strip (the operator's mixer, independent of triggering) --
+  //
+  // setLoopGain above is the TRIGGER gate — the engine drives it from the
+  // sensor's air. These set the fader that gate feeds, so pulling a channel
+  // down keeps it down no matter how hard its sensor is played.
+
+  /** Which sensors currently have a loop file loaded, in channel order. */
+  loopChannels(): Array<{ sensorId: string; name: string }> {
+    return [...this.loops.entries()].map(([sensorId, l]) => ({ sensorId, name: l.name }));
+  }
+  /** File name of a sensor's loop ('' when none is loaded). */
+  loopName(sensorId: string): string {
+    return this.loops.get(sensorId)?.name ?? '';
+  }
+  /** Operator fader 0..1 for a sensor's loop (default 0.8). Survives a reload
+   *  of the sample, so a conductor push doesn't undo a level change. */
+  loopFader(sensorId: string): number {
+    return this.loopMix.get(sensorId)?.gain ?? 0.8;
+  }
+  loopMuted(sensorId: string): boolean {
+    return this.loopMix.get(sensorId)?.mute ?? false;
+  }
+  setLoopFader(sensorId: string, v: number) {
+    const g = Math.max(0, Math.min(1, v));
+    const strip = this.loopMix.get(sensorId) ?? { gain: 0.8, mute: false };
+    strip.gain = g;
+    this.loopMix.set(sensorId, strip);
+    const l = this.loops.get(sensorId);
+    if (l) l.fader.gain.rampTo(strip.mute ? 0 : g, 0.06);
+  }
+  setLoopMute(sensorId: string, mute: boolean) {
+    const strip = this.loopMix.get(sensorId) ?? { gain: 0.8, mute: false };
+    strip.mute = mute;
+    this.loopMix.set(sensorId, strip);
+    const l = this.loops.get(sensorId);
+    if (l) l.fader.gain.rampTo(mute ? 0 : strip.gain, 0.06);
+  }
+
   /** Live level of a sensor's loop 0..1 — drives that layer's audio-reactivity. */
   getLoopLevel(sensorId: string): number {
     const l = this.loops.get(sensorId);
