@@ -81,13 +81,14 @@ function Slider({
 /** Live audio meter — polls the preview engine each frame (imperative, no
  *  per-frame React render). `mode: 'input'` shows the sample's raw level
  *  (pre-EQ); `mode: 'filtered'` shows the post-EQ band level (or the full
- *  level when EQ is bypassed). Reads 0 while the sensor isn't under Test. */
+ *  level when EQ is bypassed). Always live while a loop is loaded — the audio
+ *  input keeps arriving whether or not the part has been pulsed. */
 function LiveMeter({
-  audio, sensorId, mode, band, range, eqOn, active, label,
+  audio, sensorId, mode, band, range, eqOn, label,
 }: {
   audio: AudioEngine; sensorId: string; mode: 'input' | 'filtered';
   band: SensorRig['audioBand']; range?: [number, number]; eqOn: boolean;
-  active: boolean; label: string;
+  label: string;
 }) {
   const fillRef = useRef<HTMLDivElement | null>(null);
   const valRef = useRef<HTMLSpanElement | null>(null);
@@ -95,7 +96,7 @@ function LiveMeter({
   useEffect(() => {
     const tick = () => {
       let v = 0;
-      if (active && audio.ready) {
+      if (audio.ready) {
         if (mode === 'input') v = audio.getLoopLevel(sensorId);
         else if (!eqOn) v = audio.getLoopLevel(sensorId);
         else if (band === 'custom' && range) v = audio.getLoopBandRange(sensorId, range[0], range[1]);
@@ -107,7 +108,7 @@ function LiveMeter({
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [audio, sensorId, mode, band, range, eqOn, active]);
+  }, [audio, sensorId, mode, band, range, eqOn]);
   return (
     <div className={`cond-meter cond-meter-${mode}`}>
       <span className="cond-meter-label">{label}</span>
@@ -145,12 +146,10 @@ function AirMeter({ airRef, sensorId }: { airRef: React.RefObject<Record<string,
 /** The audio channel(s) routed INTO this part, with the live filtered level
  *  they're feeding it (loudest wins, matching the engine's router). */
 function RoutedAudioIn({
-  audio, sources, airRef, sensorId,
+  audio, sources,
 }: {
   audio: AudioEngine;
   sources: { id: string; label: string; eqOn: boolean; band: SensorRig['audioBand']; range?: [number, number] }[];
-  airRef: React.RefObject<Record<string, number>>;
-  sensorId: string;
 }) {
   const fillRef = useRef<HTMLDivElement | null>(null);
   const valRef = useRef<HTMLSpanElement | null>(null);
@@ -170,17 +169,16 @@ function RoutedAudioIn({
           if (x > v) v = x;
         }
       }
-      // GATED by this part's air, so it shows what the part actually receives.
-      // A loop keeps analysing while it plays silently, and an ungated bar here
-      // reads as "there's still audio" when nothing is in fact getting through.
-      v *= Math.min(1, airRef.current?.[sensorId] ?? 0);
+      // NOT gated by the pulse: the audio input keeps flowing in and stays
+      // visible here. The pulse is a separate thing — it's what opens the gate
+      // so you HEAR this sound and SEE the feather move.
       if (fillRef.current) fillRef.current.style.width = `${Math.round(Math.min(1, v) * 100)}%`;
       if (valRef.current) valRef.current.textContent = v.toFixed(2);
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [audio, airRef, sensorId]);
+  }, [audio]);
   return (
     <div className="cond-audioin">
       <div className="cond-audioin-top">
@@ -261,6 +259,37 @@ export default function Conductor() {
     loadIntoRig(cfg.preset);
   }, [cfg]);
 
+  // AUDIO INPUT runs continuously and independently of the pulse: once audio is
+  // unlocked, every assigned sample is loaded and looping so its level/spectrum
+  // keeps arriving for all five channels. Loops start (and stay) at gain 0 —
+  // the pulse is what opens the gate to actually hear them.
+  useEffect(() => {
+    if (!previewAudioOn) return;
+    let cancelled = false;
+    void (async () => {
+      for (const c of SENSOR_CHANNELS) {
+        const ref = cfg.sensorSamples[c.sensor] ?? null;
+        if (!ref) {
+          if (loadedSample.current[c.sensor]) {
+            previewAudio.clearLoop(c.sensor);
+            delete loadedSample.current[c.sensor];
+          }
+          continue;
+        }
+        if (loadedSample.current[c.sensor] === ref.id) continue;
+        try {
+          const buf = await fetchSampleBuffer(ref);
+          if (cancelled) return;
+          await previewAudio.loadLoopBuffer(c.sensor, buf, ref.name);
+          loadedSample.current[c.sensor] = ref.id;
+        } catch (e) {
+          setStatus(String(e));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [cfg.sensorSamples, previewAudioOn, previewAudio]);
+
   // THE BALLOON ENVELOPE — the single thing that drives every sensor here.
   //   · Pulse pumps air into `airTarget`; it leaks out at the part's RELEASE.
   //   · Test simply holds the target open at Sensitivity instead of leaking, so
@@ -315,11 +344,10 @@ export default function Conductor() {
    *  the audio-reactive glow kept going even with no audio audible. Stopped now
    *  means stopped: clearLoop so there's truly nothing left to react to. */
   const stopSensorTest = useCallback((sensorId: string) => {
-    previewSim.releaseWind(sensorId);
-    previewSim.setPresence(sensorId, false);
-    previewAudio.clearLoop(sensorId);
-    delete loadedSample.current[sensorId];
-    airTarget.current[sensorId] = 0; // let all the balloon air out too
+    // Only close the gate — the loop keeps running and being analysed, so the
+    // audio input carries on arriving. With no air it's inaudible and moves
+    // nothing, which is the whole point: audio in ≠ pulse.
+    airTarget.current[sensorId] = 0;
     airLevel.current[sensorId] = 0;
     setTestingSensors((s) => {
       if (!s.has(sensorId)) return s;
@@ -327,7 +355,7 @@ export default function Conductor() {
       n.delete(sensorId);
       return n;
     });
-  }, [previewSim, previewAudio]);
+  }, []);
 
   /** Make sure the audio context is live and this sensor's assigned loop is
    *  loaded, so a Test *or* a Pulse actually makes sound. */
@@ -628,7 +656,7 @@ export default function Conductor() {
                     </button>
                   </div>
 
-                  <LiveMeter audio={previewAudio} sensorId={c.sensor} mode="input" band={s.audioBand} range={s.audioBandRange} eqOn={eqOn} active={testing} label="Input level" />
+                  <LiveMeter audio={previewAudio} sensorId={c.sensor} mode="input" band={s.audioBand} range={s.audioBandRange} eqOn={eqOn} label="Input level" />
 
                   <div className="cond-eq-controls">
                     <button
@@ -663,7 +691,7 @@ export default function Conductor() {
                     />
                   )}
 
-                  <LiveMeter audio={previewAudio} sensorId={c.sensor} mode="filtered" band={s.audioBand} range={s.audioBandRange} eqOn={eqOn} active={testing} label={eqOn ? 'Filtered' : 'Full (EQ off)'} />
+                  <LiveMeter audio={previewAudio} sensorId={c.sensor} mode="filtered" band={s.audioBand} range={s.audioBandRange} eqOn={eqOn} label={eqOn ? 'Filtered' : 'Full (EQ off)'} />
                 </div>
               );
             })}
@@ -774,7 +802,7 @@ export default function Conductor() {
 
                     <AirMeter airRef={airLevel} sensorId={c.sensor} />
 
-                    {audioIn.length > 0 && <RoutedAudioIn audio={previewAudio} sources={audioIn} airRef={airLevel} sensorId={c.sensor} />}
+                    {audioIn.length > 0 && <RoutedAudioIn audio={previewAudio} sources={audioIn} />}
 
                     <div className="cond-field-row">
                       <label className="cond-field">
