@@ -45,7 +45,7 @@ laptop simulation or the real forest install unchanged:
 | **Keyboard** | Keys `q w e r t` fire the 5 sensor slots as enveloped pulses (amount + release). | `src/sim/KeyboardPanel.tsx`, `src/sim/inputs.ts` |
 | **Manual (operator map)** | Click/press-and-hold a sensor diamond on the room map to "blow" on it. | `src/sim/OperatorMap.tsx`, `SimTransport` |
 | **Auto-demo** | Synthetic gusts/presence on every ring sensor so the piece animates itself. | `src/transports/SimTransport.ts` |
-| **ESP32 / ESP8266 devices** ⚠️ | Real hardware over MQTT: `wind / motion / presence` per node. ⚠️ *Code says ESP8266 (`feather_node.ino`); confirm ESP32 vs ESP8266.* | `src/transports/MqttTransport.ts` |
+| **ESP8266 devices** | Real hardware over MQTT: `wind / motion / presence` per node (`feather_node.ino`). Confirmed 2026-07-19: ESP8266, not ESP32. | `src/transports/MqttTransport.ts` |
 
 **Input routing (the patch bay):** a 3-stage matrix — **source → slot → part(s)** —
 so any input can feed any of the 5 sensor slots, and one slot can move several
@@ -87,7 +87,7 @@ feather parts. 📄 `src/sim/inputs.ts`, `src/sim/InputMatrix.tsx`, `src/sim/cha
 - **Audio playback** → the Audio engine (section 5).
 - **Visual feather** → the Feather / Projection engine (section 6).
 - **LED / hardware** → `led` events out via MqttTransport.
-- ⚠️ **MIDI playback** — *listed in your example but I found NO MIDI module in the code.* Not implemented yet? Mark if you want it added. <!-- ✎ EDIT -->
+- **MIDI out** — agreed but **not built yet**; see "Planned" at the bottom.
 
 ---
 
@@ -177,10 +177,32 @@ Each = an LED/line tint + a held drone chord + a melody scale. 📄 `src/engine/
 
 ---
 
-## ❓ Open questions for Alican
-*(Claude flags these — please answer inline.)*
+## ✅ Answered (2026-07-19)
 
-1. **MIDI playback** — you listed it, but there's no MIDI module in code. Want it built? For input, output, or both? ______
-2. **ESP32 vs ESP8266** — firmware/transport comments say ESP8266. Which is the real target? ______
-3. **"Loop sequencer"** — current code is a synced multi-loop player, not a step sequencer. Do you want an actual sequencer, or is "loop player" the right label? ______
-4. **Anything missing entirely** (modules you have in your head but not in code)? ______
+1. **ESP8266 is the real hardware.** The code is correct; the ESP32 in the
+   original sketch was shorthand. All references stay ESP8266.
+2. **MIDI = OUT only, and not yet built.** Wingbeat should drive *external*
+   gear: sensor activity sends notes/CC to a DAW or hardware synth so the
+   installation's sound can be produced outside the browser. MIDI **input** is
+   not wanted. Nothing exists in code today — see "Planned" below.
+
+## ⏳ Planned — MIDI out (not built)
+
+Agreed direction, no code yet. Natural shape given the current engine: a new
+consumer subscribing to the same bus every other output uses (like AudioEngine
+does), translating engine events → Web MIDI:
+
+- `melody` / `perc` / `accent` events → note-on with velocity
+- per-sensor activation (the pulse air / envelope level) → CC per channel
+- `scene` change → program change
+
+📄 Would live alongside `src/engine/AudioEngine.ts` as e.g. `MidiOut.ts`, with a
+device picker in the Conductor or Settings. Nothing in `ConductorConfig` yet.
+
+## ❓ Still open for Alican
+
+1. **"Loop sequencer"** — current code is a synced multi-loop *player*, not a
+   step sequencer. Do you want an actual sequencer, or is "loop player" the
+   right label? ______
+2. **Anything missing entirely** (modules you have in your head but not in
+   code)? ______
