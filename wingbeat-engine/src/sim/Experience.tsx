@@ -58,6 +58,18 @@ export default function Experience() {
     return () => transport.disconnect();
   }, [transport, engine]);
 
+  // Wire audio onto the engine bus. Without this the AudioEngine has no engine
+  // reference, so init() never starts the drone bed and never emits audioReady
+  // — which is what installs the conductor's loop samples. No attach, no sound.
+  useEffect(() => {
+    const detach = audio.attach(engine);
+    const off = engine.on('audioReady', () => setAudioReady(true));
+    return () => {
+      detach();
+      off();
+    };
+  }, [audio, engine]);
+
   // Conductor live pushes land here exactly like on the console + displays.
   useConductorSync({ engine, audio, onFeather: chooseFeather });
 
