@@ -462,3 +462,16 @@
 .xp-mixrow.empty { opacity: 0.42; }
 .xp-mixrow.empty .xp-fader,
 .xp-mute:disabled { cursor: default; }
+
+/* key cap on a Control card — the letter that pumps that part */
+.xp-dev-part { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.xp-dev-part kbd {
+  font-family: ui-monospace, monospace;
+  font-size: 9px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  border: 1px solid #2c2c38;
+  background: #15151c;
+  color: #b8b8c4;
+}

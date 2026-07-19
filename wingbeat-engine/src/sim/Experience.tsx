@@ -152,16 +152,47 @@ export default function Experience() {
     [],
   );
 
+  // ---- keyboard: each key press puffs air into its part ------------------
+  //
+  // Same balloon behaviour as the conductor's Pulse: a press pumps air IN and
+  // presses STACK, then the air leaks back out at that part's Release. Keys are
+  // per-channel (q w e r t), so the page is playable without a phone.
+  const keyAir = useRef<number[]>(new Array(SLOT_PART.length).fill(0));
+  useEffect(() => {
+    const onDown = (ev: KeyboardEvent) => {
+      if (ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      // don't fire while someone is working a fader or a number box
+      const tag = (ev.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      const i = SENSOR_CHANNELS.findIndex((c) => c.key === ev.key.toLowerCase());
+      if (i < 0) return;
+      ev.preventDefault();
+      const sens = rig.sensors[SLOT_PART[i]]?.sensitivity ?? 1;
+      keyAir.current[i] = Math.min(1, keyAir.current[i] + 0.4 * Math.min(1.5, sens));
+    };
+    window.addEventListener('keydown', onDown);
+    return () => window.removeEventListener('keydown', onDown);
+  }, []);
+
   // Per-frame: each slot's motion → its fixed part, shaped by rig sensitivity.
   useEffect(() => {
     let raf = 0;
+    let last = performance.now();
     const driven = new Set<string>();
-    const loop = () => {
+    const loop = (t: number) => {
       raf = requestAnimationFrame(loop);
+      const dt = Math.min(0.1, (t - last) / 1000);
+      last = t;
       for (let i = 0; i < SLOT_PART.length; i++) {
         const id = SLOT_PART[i];
         const sens = rig.sensors[id]?.sensitivity ?? 1;
-        const v = Math.min(1, (motion.current[i] ?? 0) * sens);
+        // key air leaks out at this part's Release, exactly like a pulse
+        const rel = rig.sensors[id]?.release ?? 0.08;
+        if (keyAir.current[i] > 0) {
+          keyAir.current[i] = Math.max(0, keyAir.current[i] - dt * (0.2 + rel * 5));
+        }
+        // phone motion and key air both drive the part — loudest wins
+        const v = Math.min(1, Math.max((motion.current[i] ?? 0) * sens, keyAir.current[i]));
         if (v > 0.001) {
           transport.holdWind(id, v);
           transport.setPresence(id, v > 0.05);
@@ -299,7 +330,7 @@ export default function Experience() {
       {sheet === 'control' && (
         <section className="xp-sheet" data-accent="control">
           <h2>
-            Control <em>scan to join on your phone</em>
+            Control <em>scan to join · or press the key</em>
           </h2>
           <div className="xp-devices">
             {deviceInfo.map((info, i) => (
@@ -307,6 +338,7 @@ export default function Experience() {
                 key={i}
                 index={i}
                 partLabel={SENSOR_CHANNELS[i]?.label ?? `Part ${i + 1}`}
+                partKey={SENSOR_CHANNELS[i]?.key ?? ''}
                 info={info}
                 status={deviceStatus[i]}
                 peers={devicePeers[i]}
@@ -408,6 +440,7 @@ export default function Experience() {
 function DeviceQr({
   index,
   partLabel,
+  partKey,
   info,
   status,
   peers,
@@ -415,6 +448,7 @@ function DeviceQr({
 }: {
   index: number;
   partLabel: string;
+  partKey: string;
   info: { deviceId: string; code: string } | null;
   status: LinkStatus;
   peers: number;
@@ -440,7 +474,10 @@ function DeviceQr({
   const connected = peers > 0;
   return (
     <div className={`xp-dev ${connected ? 'joined' : ''}`}>
-      <div className="xp-dev-part">{partLabel}</div>
+      <div className="xp-dev-part">
+        {partLabel}
+        {partKey && <kbd title={`press ${partKey.toUpperCase()} to pump this part`}>{partKey.toUpperCase()}</kbd>}
+      </div>
       {connected ? (
         <div className="xp-dev-live">
           <div className="xp-dev-meter">
