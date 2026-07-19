@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
+import { useTheme, qrColors } from './theme.ts';
 import type { LinkStatus } from '../net/link.ts';
 
 interface Props {
@@ -30,13 +31,14 @@ const STATUS_LABEL: Record<LinkStatus, string> = {
 export function PairPanel({ info, status, peers, log, onClose }: Props) {
   const url = info ? `${location.origin}/controller?d=${info.deviceId}&c=${info.code}` : '';
   const [qr, setQr] = useState('');
+  const [theme] = useTheme();
 
   useEffect(() => {
     if (!url) return;
-    QRCode.toDataURL(url, { margin: 1, width: 240, color: { dark: '#e8e8e8', light: '#0c0c12' } })
+    QRCode.toDataURL(url, { margin: 1, width: 240, color: qrColors(theme) })
       .then(setQr)
       .catch(() => setQr(''));
-  }, [url]);
+  }, [url, theme]);
 
   return (
     <div className="wb-motion">

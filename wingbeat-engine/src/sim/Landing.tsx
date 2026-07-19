@@ -6,12 +6,22 @@
 // ============================================================================
 
 import './ui.css';
+import { useTheme, themeClass } from './theme.ts';
 
 export type EntryMode = 'fullscreen' | 'control' | 'mobile';
 
 export function Landing({ onPick }: { onPick: (m: EntryMode) => void }) {
+  const [theme, toggleTheme] = useTheme();
+
   return (
-    <div className="wb-landing">
+    <div className={`wb-landing ${themeClass(theme)}`}>
+      <button
+        className="wb-theme-toggle wb-landing-theme"
+        onClick={toggleTheme}
+        title="Toggle light/dark theme"
+      >
+        {theme === 'light' ? '☀ Light' : '☾ Dark'}
+      </button>
       <div className="wb-landing-title">
         Wing Beat
         <small>engine</small>

@@ -24,6 +24,7 @@ import { AudioEngine } from '../engine/AudioEngine.ts';
 import { SimTransport } from '../transports/SimTransport.ts';
 import { Projection } from './Projection.tsx';
 import { EqEditor } from './EqEditor.tsx';
+import { useTheme } from './theme.ts';
 import {
   defaultPreset,
   loadIntoRig,
@@ -208,8 +209,8 @@ export default function Conductor() {
   const player = useRef<HTMLAudioElement | null>(null);
   const skipFirstLivePush = useRef(true);
 
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => (localStorage.getItem('wb.conductorTheme') === 'light' ? 'light' : 'dark'));
-  useEffect(() => localStorage.setItem('wb.conductorTheme', theme), [theme]);
+  // Shared with the landing/console/mobile so the whole engine agrees on a theme.
+  const [theme, toggleTheme] = useTheme();
 
   // ---- live preview (own engine, so you can hear + see a config before pushing it) ---
   const previewEngine = useMemo(() => new WingbeatEngine(), []);
@@ -610,7 +611,7 @@ export default function Conductor() {
         </div>
         <div className="cond-head-actions">
           {liveInfo && <span className="cond-liveinfo">{liveInfo}</span>}
-          <button className="wb-btn" onClick={() => setTheme((t) => (t === 'light' ? 'dark' : 'light'))} title="Toggle light/dark theme">
+          <button className="wb-btn" onClick={toggleTheme} title="Toggle light/dark theme">
             {theme === 'light' ? '☀ Light' : '☾ Dark'}
           </button>
           <button className={`wb-btn ${anyTesting ? 'active' : ''}`} onClick={toggleTestAll} title="Monitor all 5 channels — audible only, no pulse and nothing pushed live">

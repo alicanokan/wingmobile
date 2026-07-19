@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
+import { useTheme, qrColors } from './theme.ts';
 import type { LinkStatus } from '../net/link.ts';
 import type { SourceKind } from './inputs.ts';
 import { Knob } from './Knob.tsx';
@@ -31,16 +32,17 @@ interface Props {
 
 function DeviceCard({ index, info, status, peers, level, threshold, onThresholdChange }: { index: number; info: DeviceInfo | null; status: LinkStatus; peers: number; level: number; threshold: number; onThresholdChange?: (index: number, v: number) => void }) {
   const [qr, setQr] = useState('');
+  const [theme] = useTheme();
   // QR open by default on desktop; collapsed on phones to keep the panel compact.
   const [show, setShow] = useState(() => typeof window === 'undefined' || window.innerWidth > 820);
   const url = info ? `${location.origin}/controller?d=${info.deviceId}&c=${info.code}` : '';
 
   useEffect(() => {
     if (!url || !show) return;
-    QRCode.toDataURL(url, { margin: 1, width: 180, color: { dark: '#e8e8e8', light: '#0c0c12' } })
+    QRCode.toDataURL(url, { margin: 1, width: 180, color: qrColors(theme) })
       .then(setQr)
       .catch(() => setQr(''));
-  }, [url, show]);
+  }, [url, show, theme]);
 
   const connected = peers > 0;
   const state = connected ? `${peers} phone${peers > 1 ? 's' : ''}` : status === 'error' ? 'error' : status === 'connecting' || status === 'idle' ? 'starting…' : 'free';
@@ -139,7 +141,7 @@ export function DevicesPanel({ devices, statuses, peers, levels, log, onClose, t
       </div>
 
       {onLocalhost && (
-        <div className="wb-settings-note" style={{ color: '#e0b060', borderColor: '#3a2f16', background: '#161206' }}>
+        <div className="wb-settings-note warn">
           You're on <b>localhost</b> — a phone on the QR can't reach that. Open the console on your <b>Network URL</b> (the LAN IP Vite prints, e.g. http://192.168.x.x:5199) so the QR points somewhere phones can actually connect.
         </div>
       )}

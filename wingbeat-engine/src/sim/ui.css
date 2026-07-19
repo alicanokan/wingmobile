@@ -730,3 +730,240 @@ input[type='range']::-moz-range-thumb {
 .wb-motion.compact .wb-knob-row {
   gap: 8px; margin: 8px 0;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   LIGHT THEME
+   Scoped to .wb-light on the root (landing / shell / mobile experience) so it
+   never leaks into the projection windows. Same warm-paper palette as the
+   /conductor light theme so the two consoles read as one product.
+
+   Deliberately NOT re-themed: the feather projection pane, the fullscreen
+   view and the collection strip that overlays it. Those are the artwork
+   output — a light backdrop there would wash out the render and throw white
+   light into a darkened room.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ---- shell + rails ------------------------------------------------------ */
+.wb-shell.wb-light { background: #f3f2ee; color: #26262e; }
+.wb-light .wb-rail { background: #f8f7f2; }
+.wb-light .wb-rail-left { border-right: 1px solid #e2e0d8; }
+.wb-light .wb-rail-sec { color: #8a8a92; border-bottom-color: #e2e0d8; }
+.wb-light .wb-rail-knob .wb-label { color: #75758a; }
+.wb-light .wb-rail-feather { background: #fff; border-color: #e2e0d8; color: #2a2a32; }
+.wb-light .wb-rail .wb-status { color: #6f6f7a; }
+.wb-light .wb-topbar { background: #fbfaf6; border-bottom-color: #e2e0d8; }
+.wb-light .wb-title small { color: #8a8a92; }
+.wb-light .wb-sep { background: #e2e0d8; }
+.wb-light .wb-label { color: #8a8a92; }
+
+/* ---- buttons, chips, inputs --------------------------------------------- */
+.wb-light .wb-btn {
+  background: linear-gradient(180deg, #ffffff, #f1efe8);
+  border: 1px solid #d8d6cc;
+  color: #4a4a56;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.6) inset, 0 1px 2px rgba(0,0,0,0.06);
+}
+.wb-light .wb-btn:hover { border-color: #b0aea2; color: #1c1c22; }
+.wb-light .wb-btn:active { box-shadow: 0 1px 3px rgba(0,0,0,0.12) inset; }
+.wb-light .wb-btn.active {
+  background: linear-gradient(180deg, #2a2a30, #1c1c22); color: #fff; border-color: #1c1c22;
+  box-shadow: none;
+}
+.wb-light .wb-btn.accent { border-color: #6d2fd6; color: #5b21b6; }
+.wb-light .wb-btn.accent.active {
+  background: linear-gradient(180deg, #8b4ff5, #6d2fd6); color: #fff; border-color: #6d2fd6;
+  box-shadow: 0 0 10px rgba(109,47,214,0.28);
+}
+.wb-light .wb-btn-ctrl { background: linear-gradient(180deg, #eef5fd, #e2eefb); border-color: #a8c8ea; color: #1f5aa8; }
+.wb-light .wb-btn-ctrl:hover { border-color: #3f7fd8; color: #14417a; }
+.wb-light .wb-btn-ctrl.active { background: #3f7fd8; border-color: #3f7fd8; color: #fff; }
+.wb-light .wb-chip { border-color: #d8d6cc; color: #6f6f7a; }
+.wb-light .wb-chip.active { background: #2a2a30; color: #fff; border-color: #1c1c22; }
+.wb-light .wb-input { background: #fff; border-color: #d8d6cc; color: #26262e; }
+.wb-light .wb-keycap {
+  background: linear-gradient(180deg, #ffffff, #f1efe8);
+  border-color: #d8d6cc; color: #4a4a56;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.7) inset, 0 1px 2px rgba(0,0,0,0.08);
+}
+.wb-light .wb-keycap:hover { border-color: #b0aea2; color: #1c1c22; }
+.wb-light .wb-keycap.listening { color: #5b21b6; border-color: #6d2fd6; box-shadow: 0 0 8px rgba(109,47,214,0.35); }
+.wb-light .wb-key { color: #9a9aa2; }
+
+/* ---- status dots (kept saturated so they stay legible on paper) --------- */
+.wb-light .wb-dot { background: #b0aea2; }
+.wb-light .wb-dot.connected { background: #2e8f52; box-shadow: 0 0 8px rgba(46,143,82,0.5); }
+.wb-light .wb-dot.connecting { background: #d68a10; }
+.wb-light .wb-dot.error, .wb-light .wb-dot.closed { background: #c04848; }
+
+/* ---- panes -------------------------------------------------------------- */
+.wb-light .wb-pane + .wb-pane { border-left-color: #e2e0d8; }
+.wb-light .wb-pane-label { color: #8a8a92; }
+
+/* ---- docked panels ------------------------------------------------------ */
+.wb-light .wb-settings,
+.wb-light .wb-scene,
+.wb-light .wb-matrix-panel,
+.wb-light .wb-motion,
+.wb-light .wb-rig {
+  background: #f8f7f2; border-right-color: #e2e0d8;
+}
+.wb-light .wb-settings-head { color: #2a2a32; }
+.wb-light .wb-settings-note { color: #4a6a2e; background: #f2f6e8; border-color: #d8e2c4; }
+.wb-light .wb-settings-section { color: #75758a; border-bottom-color: #e2e0d8; }
+.wb-light .wb-scene-hint { color: #75758a; }
+.wb-light .wb-mix-name { color: #2a2a32; }
+.wb-light .wb-mix-mute { border-color: #d8d6cc; color: #8a8a92; }
+.wb-light .wb-mix-mute.on { background: #c04848; border-color: #c04848; color: #fff; }
+.wb-light .wb-set-row label { color: #4a4a56; }
+.wb-light .wb-set-row select,
+.wb-light .wb-scene .wb-set-row select,
+.wb-light .wb-rig select { background: #fff; color: #26262e; border-color: #d8d6cc; }
+.wb-light .wb-sample-name { color: #6f6f7a; }
+.wb-light .wb-sample-name.muted { color: #a8a8b2; }
+.wb-light .wb-motion-val { color: #6f6f7a; }
+
+/* ---- source strip + routing matrix -------------------------------------- */
+.wb-light .wb-src { background: #fff; border-color: #e2e0d8; }
+.wb-light .wb-src.on { border-color: #cfcdc4; }
+.wb-light .wb-src-dot { background: #c4c2b8; }
+.wb-light .wb-src.on .wb-src-dot { background: #6d2fd6; box-shadow: 0 0 7px rgba(109,47,214,0.5); }
+.wb-light .wb-src-name { color: #6f6f7a; }
+.wb-light .wb-src-meter { background: #eceae2; }
+.wb-light .wb-src-fill { background: linear-gradient(0deg, #6d2fd6, #a07cf0); }
+.wb-light .wb-route thead th { color: #75758a; }
+.wb-light .wb-route-hw { color: #9a9aa2; }
+.wb-light .wb-route-name { color: #2a2a32; }
+.wb-light .wb-route-name .wb-key { color: #9a9aa2; }
+.wb-light .wb-route-cell { background: #fff; border-color: #d8d6cc; }
+.wb-light .wb-route-cell:hover { border-color: #b0aea2; }
+.wb-light .wb-route-cell.sel.off { background: #c4c2b8; border-color: #b0aea2; }
+.wb-light .wb-route-cell.sel.mic { background: #2e8f52; border-color: #2e8f52; }
+.wb-light .wb-route-cell.sel.camera { background: #8b5cf6; border-color: #8b5cf6; }
+.wb-light .wb-route-cell.sel.esp { background: #d68a10; border-color: #d68a10; }
+.wb-light .wb-route-cell.sel.net,
+.wb-light .wb-route-cell.sel.dev1, .wb-light .wb-route-cell.sel.dev2,
+.wb-light .wb-route-cell.sel.dev3, .wb-light .wb-route-cell.sel.dev4,
+.wb-light .wb-route-cell.sel.dev5 { background: #3f7fd8; border-color: #3f7fd8; }
+.wb-light .wb-route-cell.sel.key { background: #2a2a30; border-color: #2a2a30; }
+.wb-light .wb-route-cell.square { color: #fff; }
+.wb-light .wb-route-cell.sel.part { background: #6d2fd6; border-color: #6d2fd6; color: #fff; }
+.wb-light .wb-route-foot { color: #75758a; }
+
+/* ---- knobs, sliders, meters --------------------------------------------- */
+.wb-light .wb-knob-track { stroke: #dedcd4; }
+.wb-light .wb-knob-cap { fill: #ffffff; stroke: #d8d6cc; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.12)); }
+.wb-light .wb-knob-label { color: #8a8a92; }
+.wb-light .wb-knob-val { color: #2a2a32; }
+.wb-light input[type='range']::-webkit-slider-runnable-track {
+  background: #eceae2; border-color: #dedcd4; box-shadow: 0 1px 2px rgba(0,0,0,0.08) inset;
+}
+.wb-light input[type='range']::-moz-range-track { background: #eceae2; border-color: #dedcd4; }
+.wb-light input[type='range']::-webkit-slider-thumb {
+  background: linear-gradient(180deg, #ffffff, #e4e2da); border-color: #b0aea2;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2), 0 1px 0 rgba(255,255,255,0.8) inset;
+}
+.wb-light input[type='range']::-moz-range-thumb {
+  background: linear-gradient(180deg, #ffffff, #e4e2da); border-color: #b0aea2;
+}
+.wb-light .wb-level { background: #eceae2; border-color: #dedcd4; }
+.wb-light .wb-level-fill { background: linear-gradient(90deg, #2e8f52, #7fd6a2); }
+.wb-light .wb-level-val { color: #2a2a32; text-shadow: none; }
+.wb-light .wb-meter { background: #eceae2; border-color: #dedcd4; }
+.wb-light .wb-meter-fill { background: linear-gradient(90deg, #6d2fd6, #a07cf0); }
+
+/* ---- rig panel ---------------------------------------------------------- */
+.wb-light .wb-layer { color: #4a4a56; }
+.wb-light .wb-layer-count { color: #9a9aa2; }
+.wb-light .wb-swatch { border-color: rgba(0,0,0,0.18); }
+.wb-light .wb-matrix-name { color: #2a2a32; }
+.wb-light .wb-matrix th { color: #8a8a92; }
+.wb-light .wb-matrix input[type=checkbox] { accent-color: #6d2fd6; }
+.wb-light .wb-rig-sensor { border-top-color: #e2e0d8; }
+.wb-light .wb-rig-sensor-head > span:first-child { color: #1c1c22; }
+.wb-light .wb-mod-label { color: #6f6f7a; }
+.wb-light .wb-custom-layer { background: #fff; border-color: #e2e0d8; }
+.wb-light .wb-rig input[type=color] { border-color: #d8d6cc; }
+
+/* ---- pairing + devices + logs ------------------------------------------- */
+.wb-light .wb-pair-code { background: #fff; border-color: #e2e0d8; }
+.wb-light .wb-pair-label { color: #75758a; }
+.wb-light .wb-pair-value { color: #1c1c22; }
+.wb-light .wb-log-box { background: #fff; border-color: #e2e0d8; }
+.wb-light .wb-log-box summary { color: #75758a; }
+.wb-light .wb-log { color: #4a4a56; }
+.wb-light .wb-log > div { border-top-color: #eceae2; }
+.wb-light .wb-dev { background: #fff; border-color: #e2e0d8; }
+.wb-light .wb-dev-name { color: #1c1c22; }
+.wb-light .wb-dev-src { color: #5b21b6; border-color: #d8d6cc; }
+.wb-light .wb-dev-state,
+.wb-light .wb-dev-codes { color: #75758a; }
+.wb-light .wb-dev-code b { color: #1c1c22; }
+.wb-light .wb-phone-qr { background: #fff; border-color: #e2e0d8; }
+.wb-light .wb-phone-url { color: #6f6f7a; }
+
+/* ---- mobile chrome ------------------------------------------------------ */
+.wb-light .wb-mobile-bar { background: #fbfaf6; border-bottom-color: #e2e0d8; }
+.wb-light .wb-mobile-burger { background: #fff; border-color: #d8d6cc; color: #26262e; }
+.wb-light .wb-mobile-title { color: #2a2a32; }
+.wb-light .wb-nav-backdrop { background: rgba(0,0,0,0.28); }
+.wb-light .wb-panels:not(:empty) {
+  background: rgba(248,247,242,0.98); border-top-color: #e2e0d8;
+  box-shadow: 0 -12px 40px rgba(0,0,0,0.14);
+}
+.wb-light.wb-shell.nav-open .wb-rail-left { box-shadow: 0 0 50px rgba(0,0,0,0.22); }
+.wb-light .wb-mx-icon { background: rgba(255,255,255,0.9); border-color: #d8d6cc; color: #26262e; }
+.wb-light .wb-mx-icon.on { border-color: #6d2fd6; color: #5b21b6; }
+.wb-light .wb-mx {
+  background: rgba(248,247,242,0.98); border-color: #e2e0d8;
+  box-shadow: 0 12px 44px rgba(0,0,0,0.18);
+}
+.wb-light .wb-mx-head { color: #2a2a32; }
+.wb-light .wb-mx-sec { color: #75758a; }
+.wb-light .wb-mx-rowlabel { color: #6f6f7a; }
+.wb-light .wb-mx-cell { background: #fff; border-color: #d8d6cc; color: #4a4a56; }
+.wb-light .wb-mx-cell.sel { background: #3f7fd8; border-color: #3f7fd8; color: #fff; }
+.wb-light .wb-mx .wb-ctl-slider { accent-color: #6d2fd6; }
+
+/* the HUD floats over the (still dark) feather, so it keeps a dark scrim */
+.wb-light .wb-hud { background: rgba(20,20,28,0.62); border-color: rgba(255,255,255,0.14); }
+
+/* ---- modal -------------------------------------------------------------- */
+.wb-light .wb-modal-overlay { background: rgba(0,0,0,0.4); }
+.wb-light .wb-modal-content {
+  background: #fbfaf6; border-color: #e2e0d8; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+}
+.wb-light .wb-modal-head { color: #1c1c22; }
+.wb-light .wb-modal-text { color: #6f6f7a; }
+
+/* ---- landing ------------------------------------------------------------ */
+.wb-landing.wb-light { background: radial-gradient(circle at 50% 30%, #ffffff, #eeece4 70%); }
+.wb-light .wb-landing-title { color: #1c1c22; }
+.wb-light .wb-landing-title small { color: #7c6ea8; }
+.wb-light .wb-landing-btn {
+  background: linear-gradient(180deg, #ffffff, #f6f4ee);
+  border-color: #ddd9cd; color: #1c1c22;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+.wb-light .wb-landing-btn:hover { border-color: #6d2fd6; box-shadow: 0 0 22px rgba(109,47,214,0.18); }
+.wb-light .wb-landing-btn small { color: #75758a; }
+.wb-light .wb-landing-glyph { color: #6d2fd6; }
+
+/* theme toggle — small, quiet, never competes with the transport controls */
+.wb-theme-toggle {
+  background: transparent; border: 1px solid #2c2c38; color: #8a8a98;
+  font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+  padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  transition: border-color 0.14s, color 0.14s;
+}
+.wb-theme-toggle:hover { border-color: #555; color: #fff; }
+.wb-light .wb-theme-toggle { border-color: #d8d6cc; color: #6f6f7a; }
+.wb-light .wb-theme-toggle:hover { border-color: #b0aea2; color: #1c1c22; }
+.wb-landing-theme { position: fixed; top: 16px; right: 16px; z-index: 301; }
+
+/* warning note variant — was inline amber on every panel that raised it */
+.wb-settings-note.warn { color: #e0b060; border-color: #3a2f16; background: #161206; }
+.wb-light .wb-settings-note.warn { color: #7a5410; border-color: #e6d9b0; background: #fdf6e3; }
+
+/* keyboard monitor fill — neutral so it reads on either track colour */
+.wb-key-level .wb-level-fill { background: linear-gradient(90deg, #8a8a98, #e8e8e8); }
+.wb-light .wb-key-level .wb-level-fill { background: linear-gradient(90deg, #4a4a56, #8a8a92); }

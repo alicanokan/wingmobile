@@ -79,7 +79,7 @@ export default function CamSender() {
       </div>
 
       {!secure && (
-        <div className="wb-settings-note" style={{ color: '#e0b060', borderColor: '#3a2f16', background: '#161206' }}>
+        <div className="wb-settings-note warn">
           Camera needs a secure page. Open this over <b>https</b> (or localhost). On a LAN IP the browser blocks the webcam.
         </div>
       )}

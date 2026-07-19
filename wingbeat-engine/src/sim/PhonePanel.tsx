@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
+import { useTheme, qrColors } from './theme.ts';
 
 interface Props {
   alive: boolean;
@@ -18,14 +19,15 @@ interface Props {
 export function PhonePanel({ alive, level, onClose }: Props) {
   const url = `${location.origin}/cam`;
   const [qr, setQr] = useState('');
+  const [theme] = useTheme();
   const onLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   const insecure = !onLocalhost && location.protocol !== 'https:';
 
   useEffect(() => {
-    QRCode.toDataURL(url, { margin: 1, width: 240, color: { dark: '#e8e8e8', light: '#0c0c12' } })
+    QRCode.toDataURL(url, { margin: 1, width: 240, color: qrColors(theme) })
       .then(setQr)
       .catch(() => setQr(''));
-  }, [url]);
+  }, [url, theme]);
 
   return (
     <div className="wb-motion">
@@ -44,12 +46,12 @@ export function PhonePanel({ alive, level, onClose }: Props) {
       <div className="wb-phone-url">{url}</div>
 
       {onLocalhost && (
-        <div className="wb-settings-note" style={{ color: '#e0b060', borderColor: '#3a2f16', background: '#161206' }}>
+        <div className="wb-settings-note warn">
           You're on <b>localhost</b> — a phone can't reach that. Open the console on your <b>Network URL</b> (the LAN IP Vite prints) so the QR points at this machine.
         </div>
       )}
       {insecure && (
-        <div className="wb-settings-note" style={{ color: '#e0b060', borderColor: '#3a2f16', background: '#161206' }}>
+        <div className="wb-settings-note warn">
           Phone cameras need a secure page — serve over <b>https</b> so the phone can open its webcam.
         </div>
       )}

@@ -33,8 +33,8 @@ export function KeyboardPanel({ amount, release, level, onAmount, onRelease, onC
       </div>
 
       {/* live pulse meter */}
-      <div className="wb-level">
-        <div className="wb-level-fill" style={{ width: `${Math.round(level * 100)}%`, background: 'linear-gradient(90deg, #e8e8e8, #ffffff)' }} />
+      <div className="wb-level wb-key-level">
+        <div className="wb-level-fill" style={{ width: `${Math.round(level * 100)}%` }} />
         <span className="wb-level-val">{level.toFixed(2)}</span>
       </div>
 

@@ -27,6 +27,7 @@ import { ScenePanel } from './ScenePanel.tsx';
 import { sceneForFeather, setFeatherScene } from './featherScenes.ts';
 import { DevicesPanel, DeviceHud } from './DevicesPanel.tsx';
 import { Landing, type EntryMode } from './Landing.tsx';
+import { useTheme, themeClass } from './theme.ts';
 import { MobileMenu } from './MobileMenu.tsx';
 import { startHost, type HostHandle, type LinkStatus } from '../net/link.ts';
 import { useConductorSync } from '../net/liveSync.ts';
@@ -86,6 +87,7 @@ export default function App() {
   const [showPair, setShowPair] = useState(false);
   // Landing entry mode (null = show the landing screen, every visit).
   const [entryMode, setEntryMode] = useState<EntryMode | null>(null);
+  const [theme, toggleTheme] = useTheme();
   const [mobileMenu, setMobileMenu] = useState(false);
   const [mobileFirstTime, setMobileFirstTime] = useState(() => !localStorage.getItem('wb.mobile.setup'));
   const [swipeCount, setSwipeCount] = useState(0);
@@ -775,7 +777,7 @@ export default function App() {
   // ---- Mobile experience: compact feather + live meters + quick menu ----
   if (entryMode === 'mobile') {
     return (
-      <div className="wb-mobileexp">
+      <div className={`wb-mobileexp ${themeClass(theme)}`}>
         <Projection engine={engine} audio={audio} featherId={feather} paused={false} />
 
         {!mobileMenu && !showPair && !camOn && <DeviceHud peers={devicePeers} levels={levels} onOpen={() => setShowPair(true)} />}
@@ -792,6 +794,9 @@ export default function App() {
           </button>
           <button className={`wb-mx-icon ${mobileMenu ? 'on' : ''}`} onClick={() => setMobileMenu((v) => !v)} title="quick controls">
             ⋯
+          </button>
+          <button className="wb-mx-icon" onClick={toggleTheme} title="toggle light/dark theme">
+            {theme === 'light' ? '☀' : '☾'}
           </button>
         </div>
 
@@ -853,7 +858,7 @@ export default function App() {
   }
 
   return (
-    <div className={`wb-shell ${navOpen ? 'nav-open' : ''}`}>
+    <div className={`wb-shell ${navOpen ? 'nav-open' : ''} ${themeClass(theme)}`}>
       {/* MOBILE top bar — hamburger opens the rail as a drawer (hidden on desktop) */}
       <div className="wb-mobile-bar">
         <button className="wb-mobile-burger" onClick={() => setNavOpen((v) => !v)} aria-label="menu">
@@ -872,6 +877,9 @@ export default function App() {
           Wing Beat
           <small>engine console</small>
         </div>
+        <button className="wb-theme-toggle" onClick={toggleTheme} title="Toggle light/dark theme">
+          {theme === 'light' ? '☀ Light' : '☾ Dark'}
+        </button>
 
         <div className="wb-rail-sec">Source</div>
         <div className="wb-rail-group">
