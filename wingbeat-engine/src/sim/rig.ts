@@ -73,6 +73,16 @@ export interface SensorRig {
   audioBandRange?: [number, number]; // Hz [min,max] — used when audioBand === 'custom'
   eqOn?: boolean; // false = bypass the EQ band; reactivity reads the full loop level (default true)
   reach: number;
+  /** Let the routed AUDIO IN level drive Reach instead of the fixed slider:
+   *  silence → reachMin, full → reachMax. The slider is ignored while on. */
+  reachLink?: boolean;
+  reachMin?: number; // floor of the audio→reach mapping (default 0)
+  reachMax?: number; // ceiling of the audio→reach mapping (default 1)
+  /** Smoothing on the audio→reach follow, in SECONDS (0 = instant). Attack is
+   *  how long it takes to open toward a louder level, release how long it takes
+   *  to fall back — so reach can snap out and ease home. */
+  reachAttack?: number;
+  reachRelease?: number;
   swirl: number;
   lift: number;
   maxDist: number;
@@ -222,6 +232,11 @@ export function defaultSensorRig(sensorId: string): SensorRig {
     audioBand: 'full',
     eqOn: true,
     reach: 0.5,
+    reachLink: false,
+    reachMin: 0,
+    reachMax: 1,
+    reachAttack: 0.05,
+    reachRelease: 0.25,
     swirl: 0.6,
     lift: 0.6,
     maxDist: 1.1,

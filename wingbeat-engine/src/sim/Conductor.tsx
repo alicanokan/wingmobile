@@ -79,6 +79,122 @@ function Slider({
   );
 }
 
+/** REACH, with an optional link to the part's routed AUDIO IN.
+ *
+ *  Off  — the plain fader, a fixed reach.
+ *  On   — the audio level drives reach between Min and Max, and the fader is
+ *         replaced by a live bar showing where it currently sits (read from the
+ *         same routed sources the AUDIO IN meter uses, so the two agree).
+ */
+function ReachControl({
+  audio, sources, value, link, min, max, atk, rel, onValue, onLink, onMin, onMax, onAtk, onRel,
+}: {
+  audio: AudioEngine;
+  sources: { id: string; label: string; eqOn: boolean; band: SensorRig['audioBand']; range?: [number, number] }[];
+  value: number; link: boolean; min: number; max: number; atk: number; rel: number;
+  onValue: (v: number) => void; onLink: (on: boolean) => void;
+  onMin: (v: number) => void; onMax: (v: number) => void;
+  onAtk: (v: number) => void; onRel: (v: number) => void;
+}) {
+  const fillRef = useRef<HTMLDivElement | null>(null);
+  const valRef = useRef<HTMLSpanElement | null>(null);
+  const srcRef = useRef(sources);
+  srcRef.current = sources;
+  // Read through refs so changing a limit or a time doesn't restart the loop.
+  const cfgRef = useRef({ min, max, atk, rel });
+  cfgRef.current = { min, max, atk, rel };
+
+  useEffect(() => {
+    if (!link) return;
+    let raf = 0;
+    let sm = 0;
+    let last = performance.now();
+    const tick = (t: number) => {
+      const dt = Math.min(0.1, (t - last) / 1000);
+      last = t;
+      let v = 0;
+      if (audio.ready) {
+        for (const s of srcRef.current) {
+          const x = !s.eqOn
+            ? audio.getLoopLevel(s.id)
+            : s.band === 'custom' && s.range
+              ? audio.getLoopBandRange(s.id, s.range[0], s.range[1])
+              : audio.getLoopBand(s.id, s.band === 'custom' ? 'full' : s.band);
+          if (x > v) v = x;
+        }
+      }
+      const c = cfgRef.current;
+      const target = c.min + (c.max - c.min) * Math.min(1, v);
+      // Same A/R smoothing the projection applies, so this bar shows the real
+      // reach rather than the raw audio.
+      const tau = target > sm ? c.atk : c.rel;
+      sm = tau > 0 ? target + (sm - target) * Math.exp(-dt / tau) : target;
+      if (fillRef.current) fillRef.current.style.width = `${Math.round(sm * 100)}%`;
+      if (valRef.current) valRef.current.textContent = sm.toFixed(2);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [audio, link]);
+
+  return (
+    <div className="cond-reach">
+      <div className="cond-reach-top">
+        <span className="cond-slider-label">Reach</span>
+        <button
+          className={`cond-link ${link ? 'on' : ''}`}
+          onClick={() => onLink(!link)}
+          aria-pressed={link}
+          title="Let the routed AUDIO IN level drive Reach between Min and Max"
+        >
+          ⇢ audio
+        </button>
+        {link ? (
+          <>
+            <div className="cond-reach-bar"><div ref={fillRef} className="cond-reach-fill" /></div>
+            <span ref={valRef} className="cond-slider-val">0.00</span>
+          </>
+        ) : (
+          <>
+            <input type="range" min={0} max={1} step={0.01} value={value} onChange={(e) => onValue(Number(e.target.value))} />
+            <span className="cond-slider-val">{value.toFixed(2)}</span>
+          </>
+        )}
+      </div>
+      <div className={`cond-reach-lims ${link ? '' : 'idle'}`}>
+        <label>
+          Min
+          <input
+            type="number" min={0} max={1} step={0.05} value={min} disabled={!link}
+            onChange={(e) => onMin(Math.min(max, Math.max(0, Number(e.target.value))))}
+          />
+        </label>
+        <label>
+          Max
+          <input
+            type="number" min={0} max={1} step={0.05} value={max} disabled={!link}
+            onChange={(e) => onMax(Math.max(min, Math.min(1, Number(e.target.value))))}
+          />
+        </label>
+        <label title="Attack — seconds to open toward a louder level (0 = instant)">
+          A
+          <input
+            type="number" min={0} max={2} step={0.01} value={atk} disabled={!link}
+            onChange={(e) => onAtk(Math.max(0, Math.min(2, Number(e.target.value))))}
+          />
+        </label>
+        <label title="Release — seconds to fall back as the sound dies (0 = instant)">
+          R
+          <input
+            type="number" min={0} max={4} step={0.05} value={rel} disabled={!link}
+            onChange={(e) => onRel(Math.max(0, Math.min(4, Number(e.target.value))))}
+          />
+        </label>
+      </div>
+    </div>
+  );
+}
+
 /** Live audio meter — polls the preview engine each frame (imperative, no
  *  per-frame React render). `mode: 'input'` shows the sample's raw level
  *  (pre-EQ); `mode: 'filtered'` shows the post-EQ band level (or the full
@@ -878,7 +994,22 @@ export default function Conductor() {
                       <Slider label="Sensitivity" value={s.sensitivity ?? 1} min={0.2} max={3} step={0.05} onChange={(v) => patchSensor(c.sensor, (x) => { x.sensitivity = v; })} fmt={(v) => `${v.toFixed(2)}×`} />
                       <Slider label="Attack" value={s.attack} min={0.03} max={0.6} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.attack = v; x.modules.release = true; })} />
                       <Slider label="Release" value={s.release} min={0.02} max={0.4} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.release = v; x.modules.release = true; })} />
-                      <Slider label="Reach" value={s.reach} min={0} max={1} step={0.01} onChange={(v) => patchSensor(c.sensor, (x) => { x.reach = v; })} />
+                      <ReachControl
+                        audio={previewAudio}
+                        sources={audioIn}
+                        value={s.reach}
+                        link={s.reachLink === true}
+                        min={s.reachMin ?? 0}
+                        max={s.reachMax ?? 1}
+                        atk={s.reachAttack ?? 0.05}
+                        rel={s.reachRelease ?? 0.25}
+                        onValue={(v) => patchSensor(c.sensor, (x) => { x.reach = v; })}
+                        onLink={(on) => patchSensor(c.sensor, (x) => { x.reachLink = on; })}
+                        onMin={(v) => patchSensor(c.sensor, (x) => { x.reachMin = v; })}
+                        onMax={(v) => patchSensor(c.sensor, (x) => { x.reachMax = v; })}
+                        onAtk={(v) => patchSensor(c.sensor, (x) => { x.reachAttack = v; })}
+                        onRel={(v) => patchSensor(c.sensor, (x) => { x.reachRelease = v; })}
+                      />
                     </div>
                     <div className="cond-field-row">
                       <label className="cond-check">

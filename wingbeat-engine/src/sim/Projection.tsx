@@ -793,6 +793,7 @@ function ImageFeather({
   const pulses = useRef(new Float32Array(MAX_LAYERS).fill(2)); // per-layer beat wave (2 = idle)
   const floatHold = useRef(new Float32Array(NCH)); // seconds left of "float" before air sinks
   const filtered = useRef(new Float32Array(NCH)); // per-AUDIO-channel post-EQ level, for the router
+  const reachSm = useRef(new Float32Array(NCH)); // smoothed audio-linked reach (A/R shaped)
   const lastT = useRef(0);
   const wingRef = useRef(0); // smoothed wing-beat swing amplitude
   const idleRef = useRef(0); // seconds since last interaction (→ sand-fall)
@@ -1011,6 +1012,22 @@ function ImageFeather({
       // let loops drive their layers with no trigger.
       const act = g.autoAudio ? 1 : Math.min(1, E[i]);
       audioCh[i] = Math.min(1, rawBand * (sr?.sensitivity ?? 1) * act);
+      // REACH LINK: the routed audio level drives Reach between its limits, so
+      // the part's throw follows the sound instead of sitting at a fixed value.
+      // Uses rawBand (the same pre-gate signal the conductor's AUDIO IN meter
+      // shows) so what you see on that meter is what moves the fader.
+      if (sr?.reachLink && sr.modules.movement) {
+        const lo = sr.reachMin ?? 0;
+        const hi = sr.reachMax ?? 1;
+        const target = lo + (hi - lo) * Math.min(1, rawBand);
+        // Attack/Release are time constants in seconds: rising toward a louder
+        // level uses attack, falling back uses release, so reach can snap open
+        // and ease home. 0 = follow the audio instantly.
+        const prev = reachSm.current[i];
+        const tau = target > prev ? (sr.reachAttack ?? 0) : (sr.reachRelease ?? 0);
+        reachSm.current[i] = tau > 0 ? target + (prev - target) * Math.exp(-dt / tau) : target;
+        reach[i] = reachSm.current[i];
+      }
       // AUTO-AUDIO: loops play on their own and DRIVE their layer (charge / colour /
       // motion) without any sensor trigger — each loop animates a different layer.
       if (g.autoAudio && audio.hasLoop(sid)) {

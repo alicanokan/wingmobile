@@ -764,3 +764,71 @@
   background: #b8860b; border-color: #b8860b; color: #fff;
   box-shadow: 0 0 8px #b8860b44;
 }
+
+/* REACH with its audio link — the switch, a live bar when linked, and the
+   Min/Max limits that bound the mapping. */
+.cond-reach { display: flex; flex-direction: column; gap: 3px; }
+.cond-reach-top { display: grid; grid-template-columns: 62px auto 1fr 42px; align-items: center; gap: 6px; }
+.cond-reach-top input[type='range'] {
+  -webkit-appearance: none; appearance: none;
+  height: 3px; border-radius: 2px; background: #26263a; outline: none;
+}
+.cond-reach-top input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 13px; height: 13px; border-radius: 50%;
+  background: #e8c56a; cursor: pointer; border: 2px solid #0d0d15;
+}
+.cond-link {
+  border: 1px solid #26263a;
+  background: #14141f;
+  color: #71718a;
+  border-radius: 20px;
+  padding: 2px 8px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.cond-link:hover { border-color: #3f7fd888; color: #9ecbff; }
+.cond-link.on {
+  background: #3f7fd8; border-color: #3f7fd8; color: #041424; font-weight: 600;
+  box-shadow: 0 0 8px #3f7fd855;
+}
+.cond-reach-bar {
+  height: 6px; border-radius: 4px;
+  background: #14141f; border: 1px solid #26263a; overflow: hidden;
+}
+.cond-reach-fill {
+  height: 100%; width: 0%; border-radius: 4px;
+  background: linear-gradient(90deg, #3f7fd8, #9ecbff);
+  transition: width 60ms linear;
+}
+.cond-reach-lims { display: flex; gap: 10px; padding-left: 68px; }
+.cond-reach-lims.idle { opacity: 0.4; }
+.cond-reach-lims label {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: #71718a;
+}
+.cond-reach-lims input {
+  width: 52px;
+  background: #14141f; color: #cfcfda;
+  border: 1px solid #26263a; border-radius: 5px;
+  padding: 2px 4px; font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.cond-reach-lims input:disabled { opacity: 0.55; cursor: default; }
+
+/* light theme */
+.cond-light .cond-reach-top input[type='range'] { background: #e2e0d8; }
+.cond-light .cond-reach-top input[type='range']::-webkit-slider-thumb { background: #b8860b; border-color: #f3f2ee; }
+.cond-light .cond-link { background: #fff; border-color: #d8d6cc; color: #75758a; }
+.cond-light .cond-link:hover { border-color: #3f7fd888; color: #2266aa; }
+.cond-light .cond-link.on { background: #3f7fd8; border-color: #3f7fd8; color: #fff; }
+.cond-light .cond-reach-bar { background: #eceae2; border-color: #d8d6cc; }
+.cond-light .cond-reach-lims label { color: #75758a; }
+.cond-light .cond-reach-lims input { background: #fff; color: #26262e; border-color: #d8d6cc; }
+
+/* four limit/time boxes wrap on narrow panels rather than squeezing */
+.cond-reach-lims { flex-wrap: wrap; row-gap: 4px; }
+.cond-reach-lims input { width: 46px; }
