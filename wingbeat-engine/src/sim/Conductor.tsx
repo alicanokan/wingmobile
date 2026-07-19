@@ -232,6 +232,13 @@ export default function Conductor() {
   // that drives the sensor — so sound and picture share one gate: no air, nothing.
   const airTarget = useRef<Record<string, number>>({});
   const airLevel = useRef<Record<string, number>>({});
+  // Channels whose router row is OFF are fully out: no video reaction AND no
+  // audible output, even when the part is pulsed. Kept in a ref so the engine's
+  // node handler (subscribed once) always sees the current routing.
+  const mutedChannels = useRef<Set<string>>(new Set());
+  mutedChannels.current = new Set(
+    SENSOR_CHANNELS.filter((c) => audioRouteTargets(cfg.preset, c.sensor).length === 0).map((c) => c.sensor),
+  );
 
   useEffect(() => {
     previewSim.connect(previewEngine);
@@ -244,8 +251,9 @@ export default function Conductor() {
       if (!e.id.startsWith('sensor_') || !previewAudio.hasLoop(e.id)) return;
       // Volume tracks the balloon's air level (the sensor's output), so the loop
       // fades in on Attack and out on Release with the picture, and is SILENT
-      // whenever there's no air — no pulse, no sound.
-      const out = e.state.wind;
+      // whenever there's no air — no pulse, no sound. A channel routed OFF is
+      // muted outright, so Off is a true kill switch for that channel.
+      const out = mutedChannels.current.has(e.id) ? 0 : e.state.wind;
       previewAudio.setLoopGain(e.id, out > 0.02 ? Math.min(1.2, out * 1.2) : 0);
     });
     return () => {
@@ -289,6 +297,14 @@ export default function Conductor() {
     })();
     return () => { cancelled = true; };
   }, [cfg.sensorSamples, previewAudioOn, previewAudio]);
+
+  // Apply an OFF row's mute straight away, rather than waiting for the next
+  // engine node event to push the gain down.
+  useEffect(() => {
+    for (const c of SENSOR_CHANNELS) {
+      if (mutedChannels.current.has(c.sensor)) previewAudio.setLoopGain(c.sensor, 0);
+    }
+  }, [cfg, previewAudio]);
 
   // THE BALLOON ENVELOPE — the single thing that drives every sensor here.
   //   · Pulse pumps air into `airTarget`; it leaks out at the part's RELEASE.
@@ -636,6 +652,9 @@ export default function Conductor() {
                   <div className="cond-achan-head">
                     <b>{c.label}</b>
                     <span className="cond-sensor-sub">{c.sensor} · key {c.key.toUpperCase()}</span>
+                    {mutedChannels.current.has(c.sensor) && (
+                      <span className="cond-achan-off" title="Routed Off — this channel is muted and drives no feather part">off</span>
+                    )}
                   </div>
                   <div className="cond-field-row">
                     <label className="cond-field">
