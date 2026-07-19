@@ -235,6 +235,7 @@ export default function Conductor() {
   // Channels whose router row is OFF are fully out: no video reaction AND no
   // audible output, even when the part is pulsed. Kept in a ref so the engine's
   // node handler (subscribed once) always sees the current routing.
+  const lastGain = useRef<Record<string, number>>({}); // last gain applied, so we only ramp on change
   const mutedChannels = useRef<Set<string>>(new Set());
   mutedChannels.current = new Set(
     SENSOR_CHANNELS.filter((c) => audioRouteTargets(cfg.preset, c.sensor).length === 0).map((c) => c.sensor),
@@ -247,17 +248,10 @@ export default function Conductor() {
     // (Deliberately NOT calling previewAudio.attach(previewEngine) here — that
     // wires the ambient drone/wind-noise/bell synth voices, which would hum
     // continuously in this small preview. Only the assigned loop samples play.)
-    const offNode = previewEngine.on('node', (e: { id: string; state: { wind: number; present: boolean } }) => {
-      if (!e.id.startsWith('sensor_') || !previewAudio.hasLoop(e.id)) return;
-      // Volume tracks the balloon's air level (the sensor's output), so the loop
-      // fades in on Attack and out on Release with the picture, and is SILENT
-      // whenever there's no air — no pulse, no sound. A channel routed OFF is
-      // muted outright, so Off is a true kill switch for that channel.
-      const out = mutedChannels.current.has(e.id) ? 0 : e.state.wind;
-      previewAudio.setLoopGain(e.id, out > 0.02 ? Math.min(1.2, out * 1.2) : 0);
-    });
+    // Loop volume is decided once per frame in the envelope loop below (it needs
+    // the pulse air, the Test monitor state and the routing together), so nothing
+    // is wired to node events here.
     return () => {
-      offNode();
       previewSim.disconnect();
     };
   }, [previewEngine, previewAudio, previewSim]);
@@ -306,14 +300,14 @@ export default function Conductor() {
     }
   }, [cfg, previewAudio]);
 
-  // THE BALLOON ENVELOPE — the single thing that drives every sensor here.
+  // THE BALLOON ENVELOPE — air comes from PULSES AND NOTHING ELSE.
   //   · Pulse pumps air into `airTarget`; it leaks out at the part's RELEASE.
-  //   · Test simply holds the target open at Sensitivity instead of leaking, so
-  //     Test can't bypass the gate the way a direct hold used to (you'd hear the
-  //     loop while "Pulse air" honestly read 0.00).
   //   · `airLevel` chases the target at ATTACK rising / RELEASE falling, and is
-  //     what actually reaches the engine — so Attack/Release shape the pulse's
-  //     sound and picture together, and no air means silence.
+  //     what drives the part — so Attack/Release shape the pulse, and the
+  //     Pulse-air meter only ever moves because you pulsed.
+  //   · TEST is deliberately NOT part of this. It is an audio monitor: it makes
+  //     that channel's loop audible so you can hear and EQ it, and moves neither
+  //     the air nor the feather.
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
@@ -325,10 +319,9 @@ export default function Conductor() {
         const s = cfg.preset.sensors[id];
         const atk = s?.attack ?? 0.15;
         const rel = s?.release ?? 0.08;
-        const sens = Math.min(1, s?.sensitivity ?? 1);
 
-        let tgt = testingSensors.has(id) ? sens : airTarget.current[id] ?? 0;
-        if (!testingSensors.has(id) && tgt > 0) tgt = Math.max(0, tgt - dt * (0.2 + rel * 5));
+        let tgt = airTarget.current[id] ?? 0;
+        if (tgt > 0) tgt = Math.max(0, tgt - dt * (0.2 + rel * 5)); // leak
         airTarget.current[id] = tgt;
 
         const lvl = airLevel.current[id] ?? 0;
@@ -345,26 +338,32 @@ export default function Conductor() {
           previewSim.releaseWind(id);
           previewSim.setPresence(id, false);
         }
+
+        // Loop volume, decided in one place: a channel routed Off is silent, a
+        // channel being monitored with Test is audible at a steady level, and
+        // otherwise the pulse's air fades it in and out.
+        const g = mutedChannels.current.has(id)
+          ? 0
+          : testingSensors.has(id)
+            ? 0.9
+            : next > 0.02
+              ? Math.min(1.2, next * 1.2)
+              : 0;
+        if (Math.abs((lastGain.current[id] ?? -1) - g) > 0.01) {
+          lastGain.current[id] = g;
+          previewAudio.setLoopGain(id, g);
+        }
       }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [cfg, testingSensors, previewSim]);
+  }, [cfg, testingSensors, previewSim, previewAudio]);
 
-  /** Stop a sensor's test — releases wind/presence so the shader's own Release
-   *  setting plays out the natural decay (motion AND audio-reactive color), AND
-   *  fully stops the loop. A loop's meter/FFT tap its RAW output (before the
-   *  gain node) so a layer can react to sound before its gain is up — but that
-   *  also means fading gain to 0 on Stop never actually reads as silence, so
-   *  the audio-reactive glow kept going even with no audio audible. Stopped now
-   *  means stopped: clearLoop so there's truly nothing left to react to. */
+  /** Stop monitoring a channel. The loop keeps running and being analysed (the
+   *  audio input carries on arriving); it just stops being audible. Nothing to
+   *  do with the pulse — Test never touched the air. */
   const stopSensorTest = useCallback((sensorId: string) => {
-    // Only close the gate — the loop keeps running and being analysed, so the
-    // audio input carries on arriving. With no air it's inaudible and moves
-    // nothing, which is the whole point: audio in ≠ pulse.
-    airTarget.current[sensorId] = 0;
-    airLevel.current[sensorId] = 0;
     setTestingSensors((s) => {
       if (!s.has(sensorId)) return s;
       const n = new Set(s);
@@ -392,19 +391,12 @@ export default function Conductor() {
     }
   }, [cfg, previewAudio]);
 
-  /** Start a sensor's test — loads its assigned sample if needed, then HOLDS it
-   *  (like a held key) until stopSensorTest is called, so Attack/Release and the
-   *  sample's own length are fully audible/visible instead of a fixed blip.
-   *  No auto-stop: audio and the particle reaction only end when you press Stop
-   *  (or leave the page, which tears the preview down). A timed auto-stop here
-   *  would silently desync the two — sound cutting out while the shape is still
-   *  held "active" is exactly the bug this is meant to avoid. */
+  /** MONITOR a channel: load its sample if needed and make the loop audible so
+   *  you can hear it and set its EQ. It does NOT pulse — no air, no feather
+   *  movement — because a pulse must only ever come from the Pulse button. */
   const startSensorTest = async (sensorId: string) => {
     try {
       await ensureLoop(sensorId);
-      // No direct hold: the balloon envelope above sees this sensor is testing
-      // and holds its target open at Sensitivity, so Test ramps in on Attack and
-      // reads truthfully on the Pulse-air meter like everything else.
       setTestingSensors((s) => new Set(s).add(sensorId));
     } catch (e) {
       setStatus(String(e));
@@ -621,7 +613,7 @@ export default function Conductor() {
           <button className="wb-btn" onClick={() => setTheme((t) => (t === 'light' ? 'dark' : 'light'))} title="Toggle light/dark theme">
             {theme === 'light' ? '☀ Light' : '☾ Dark'}
           </button>
-          <button className={`wb-btn ${anyTesting ? 'active' : ''}`} onClick={toggleTestAll} title="Hold all 5 sensors on the preview below — nothing is pushed live">
+          <button className={`wb-btn ${anyTesting ? 'active' : ''}`} onClick={toggleTestAll} title="Monitor all 5 channels — audible only, no pulse and nothing pushed live">
             {anyTesting ? '■ Stop' : '▶ Test all'}
           </button>
           <label className={`wb-btn cond-livemode ${liveMode ? 'active' : ''}`}>
@@ -669,7 +661,7 @@ export default function Conductor() {
                     <button
                       className={`wb-btn ${testing ? 'active' : ''}`}
                       onClick={() => toggleSensorTest(c.sensor)}
-                      title="Hold this sensor on the video output — nothing is pushed live"
+                      title="Monitor this channel — makes its loop audible so you can hear + EQ it. Does not pulse the feather."
                     >
                       {testing ? '■ Stop' : '▶ Test'}
                     </button>
