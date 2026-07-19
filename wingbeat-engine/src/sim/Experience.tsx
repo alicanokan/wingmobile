@@ -87,6 +87,14 @@ export default function Experience() {
     audio.setMasterGain(masterGain);
   }, [audio, masterGain]);
 
+  // No drone here. The bed is a continuous pad that starts with the audio
+  // engine and never stops — right for the console, wrong for a page whose
+  // whole point is the sample loops. Muted before init(), so the bus is built
+  // silent rather than fading down after you hear it.
+  useEffect(() => {
+    audio.setLayerMute('bed', true);
+  }, [audio]);
+
   // ---- phone controllers: one host per slot, slot i drives part i ---------
   const linksRef = useRef<HostHandle[]>([]);
   const motion = useRef<number[]>(Array(DEVICE_COUNT).fill(0));
