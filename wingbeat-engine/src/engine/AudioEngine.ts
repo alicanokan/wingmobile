@@ -369,10 +369,22 @@ export class AudioEngine {
     player.connect(fft);                              // RAW spectrum → low/mid/high bands,
     //   so the layer reacts to the loop's sound even before its volume is up.
     this.loops.set(sensorId, { player, gain, fader, meter, fft, target: 0, name: label });
-    // start looping right away so it's instantly audible (when triggered) AND being
-    // analysed; sync stays tight because all loops share the transport tempo.
+    // SYNC — every loop plays as if it had been running since transport time 0.
+    //
+    // Files finish decoding at different moments, and a conductor push reloads
+    // one channel mid-performance, so a bare start() left each loop at whatever
+    // phase it happened to begin: same-length stems layered out of alignment.
+    // Instead, enter the buffer at the offset a loop started at transport 0
+    // would be at right now. Same-length loops therefore always share a
+    // downbeat, and loops of different lengths still meet at 0 (a 2-bar and a
+    // 4-bar stem line up every 4 bars) rather than at an arbitrary phase.
+    //
+    // Alignment holds after that: looping buffer sources all run off the one
+    // audio hardware clock, so they don't drift relative to each other.
+    const period = ab.duration;
+    const offset = period > 0 ? Tone.getTransport().seconds % period : 0;
     try {
-      player.start();
+      player.start(undefined, offset);
     } catch {
       /* race */
     }
