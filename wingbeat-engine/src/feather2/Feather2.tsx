@@ -5,7 +5,7 @@
 //  color layers, this page recovers the feather's SKELETON (see anatomy.ts)
 //  and animates each anatomical part on its own audio feature:
 //
-//    ocellus (the eye)  ← BEAT      concentric ring pulse out of the eye
+//    markings           ← BEAT      each analyzed marking pulses as a shape
 //    color patterns     ← MELODY    the pattern groups shift hue
 //    downy base         ← BASS      travelling wave, like the tail breathing
 //    barbs              ← HIGHS     fine shimmer across the vane
@@ -23,6 +23,29 @@ import * as THREE from 'three';
 import { FEATHERS } from '../sim/feathers.ts';
 import { analyzeAnatomy, loadImage, type Anatomy, PART } from './anatomy.ts';
 import { AudioFeed } from './audio2.ts';
+
+// scan + response settings survive reloads, so a tuned analysis is kept
+const SENS_KEY = 'f2.sensitivity';
+const AMPS_KEY = 'f2.amps';
+
+function loadSens(): number {
+  const raw = localStorage.getItem(SENS_KEY);
+  const v = raw === null ? NaN : Number(raw);
+  return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5;
+}
+
+type Amps = { eye: number; color: number; wave: number; shimmer: number };
+function loadAmps(): Amps {
+  const amps: Amps = { eye: 1, color: 1, wave: 1, shimmer: 1 };
+  try {
+    const saved = JSON.parse(localStorage.getItem(AMPS_KEY) ?? '{}') as Partial<Amps>;
+    for (const k of Object.keys(amps) as (keyof Amps)[]) {
+      const v = Number(saved[k]);
+      if (Number.isFinite(v)) amps[k] = Math.max(0, Math.min(2, v));
+    }
+  } catch { /* fresh defaults */ }
+  return amps;
+}
 
 const PART_NAMES: Record<number, string> = {
   [PART.calamus]: 'Calamus',
@@ -90,29 +113,32 @@ const VERT = /* glsl */ `
       glow += uWave * 0.22 * downy + uShimmer * 0.28 * abs(jit) * 2.0 * (1.0 - downy);
     }
 
-    // PATTERN PULSE — every marking reacts to the beat in the shape it is.
-    // Round markings (an ocellus, a spot) ring outward from their centre.
-    // Elongated ones (a chevron bar, a stripe) ripple ALONG their length and
-    // displace across it, like a plucked string. Each marking carries its own
-    // phase so a barred feather cascades instead of thumping in lockstep.
+    // PATTERN PULSE — the beat moves the MARKINGS THEMSELVES, not rings drawn
+    // over them. Each detected marking pulses as one coherent shape: a spot or
+    // ocellus swells about its own centre keeping its outline, a bar stretches
+    // along its length and shoves across it. Per-marking phase staggers the
+    // kick so a barred feather cascades instead of thumping in lockstep.
     float kind = aPatA.w;
     if (kind > 0.5) {
       float phase = aPatA.z * 6.2831;
       float across = aPatB.w;
-      float falloff = smoothstep(1.5, 0.1, across);
+      float kick = uBeat * uAmpEye * (0.8 + 0.2 * cos(phase));
 
       if (kind < 1.5) {
-        vec2 dir = p - aPatA.xy;
-        float len = max(0.0001, length(dir));
-        float ring = sin(across * 10.0 - uTime * 7.0 + phase);
-        p += (dir / len) * uBeat * uAmpEye * (0.030 + 0.026 * ring) * falloff;
+        // round marking: uniform swell — the whole spot grows on the beat,
+        // shape intact, feathered off at the rim
+        vec2 fromC = p - aPatA.xy;
+        p += fromC * kick * 0.30 * smoothstep(1.6, 1.0, across);
       } else {
+        // bar / chevron: stretch along the marking, and bounce the whole bar
+        // across its axis — each bar leans its own way via its phase
         vec2 axis = normalize(aPatB.xy + vec2(1e-5));
         vec2 nrm = vec2(-axis.y, axis.x);
-        float travel = sin(aPatB.z * 4.5 - uTime * 6.0 + phase);
-        p += nrm * uBeat * uAmpEye * 0.032 * travel * falloff;
+        float falloff = smoothstep(1.5, 0.1, across);
+        p += axis * aPatB.z * kick * 0.045 * falloff;
+        p += nrm * kick * 0.026 * cos(phase * 3.0) * falloff;
       }
-      glow += uBeat * falloff * (part == 4.0 ? 1.1 : 0.7);
+      glow += uBeat * smoothstep(1.5, 0.1, across) * (part == 4.0 ? 1.1 : 0.7);
     }
 
     // rachis + calamus stay rigid — they are the skeleton
@@ -206,12 +232,16 @@ export default function Feather2() {
   const feed = useMemo(() => new AudioFeed(), []);
   useEffect(() => () => feed.dispose(), [feed]);
 
-  const amps = useRef({ eye: 1, color: 1, wave: 1, shimmer: 1 });
+  const amps = useRef<Amps>(loadAmps());
   const [, setAmpTick] = useState(0);
+  const [sens, setSens] = useState(loadSens);
+  const sensRef = useRef(sens);
 
   const mountRef = useRef<HTMLDivElement | null>(null);
   const featherFile = useRef<HTMLInputElement | null>(null);
   const audioFile = useRef<HTMLInputElement | null>(null);
+  // the decoded photo stays around so a sensitivity change can re-scan it
+  const srcImg = useRef<HTMLImageElement | null>(null);
   // debug tint, toggled without rebuilding the scene
   const debugRef = useRef<0 | 1 | 2>(0);
   const dbgRef = useRef<() => void>(() => {});
@@ -221,7 +251,8 @@ export default function Feather2() {
     setError('');
     try {
       const img = await loadImage(src);
-      setAnatomy(analyzeAnatomy(img));
+      srcImg.current = img;
+      setAnatomy(analyzeAnatomy(img, { sensitivity: sensRef.current }));
       setSourceName(label);
     } catch (e) {
       setError(String((e as Error)?.message ?? e));
@@ -229,6 +260,28 @@ export default function Feather2() {
       setBusy('');
     }
   };
+
+  // sensitivity changed: save it, then re-scan the current feather (debounced,
+  // and after a paint so the "rescanning" note shows before analysis blocks)
+  useEffect(() => {
+    if (sens === sensRef.current) return; // mount — nothing to redo
+    sensRef.current = sens;
+    localStorage.setItem(SENS_KEY, String(sens));
+    if (!srcImg.current) return;
+    const t = setTimeout(() => {
+      setBusy('rescanning…');
+      requestAnimationFrame(() => {
+        try {
+          setAnatomy(analyzeAnatomy(srcImg.current!, { sensitivity: sens }));
+        } catch (e) {
+          setError(String((e as Error)?.message ?? e));
+        } finally {
+          setBusy('');
+        }
+      });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [sens]);
 
   // ---- three.js scene -----------------------------------------------------
   useEffect(() => {
@@ -344,8 +397,9 @@ export default function Feather2() {
     return m;
   }, [anatomy]);
 
-  const setAmp = (key: keyof typeof amps.current, v: number) => {
+  const setAmp = (key: keyof Amps, v: number) => {
     amps.current[key] = v;
+    localStorage.setItem(AMPS_KEY, JSON.stringify(amps.current));
     setAmpTick((x) => x + 1);
   };
 
@@ -441,6 +495,12 @@ export default function Feather2() {
             </div>
             <div className="f2-srcname">{feed.sourceLabel || 'no audio yet — drop a track or open the mic'}</div>
 
+            <div className="f2-sec">Scan</div>
+            <F2Amp label="Image scan sensitivity" min={0} max={1} step={0.02} value={sens} onChange={setSens} />
+            <div className="f2-srcname">
+              {busy || `${Math.round(sens * 100)}% — saved · re-scans this feather`}
+            </div>
+
             <div className="f2-sec">Responses</div>
             <F2Amp label="Pulse · beat" value={amps.current.eye} onChange={(v) => setAmp('eye', v)} disabled={anatomy.zones.length === 0} />
             <F2Amp label="Color · melody" value={amps.current.color} onChange={(v) => setAmp('color', v)} />
@@ -480,7 +540,13 @@ export default function Feather2() {
               <button className="f2-btn" onClick={() => featherFile.current?.click()}>
                 upload another
               </button>
-              <button className="f2-btn" onClick={() => setAnatomy(null)}>
+              <button
+                className="f2-btn"
+                onClick={() => {
+                  srcImg.current = null; // don't let a sens change re-open the old scan
+                  setAnatomy(null);
+                }}
+              >
                 gallery
               </button>
             </div>
@@ -494,15 +560,16 @@ export default function Feather2() {
 }
 
 function F2Amp({
-  label, value, onChange, disabled,
+  label, value, onChange, disabled, min = 0, max = 2, step = 0.05,
 }: {
-  label: string; value: number; onChange: (v: number) => void; disabled?: boolean;
+  label: string; value: number; onChange: (v: number) => void;
+  disabled?: boolean; min?: number; max?: number; step?: number;
 }) {
   return (
     <label className={`f2-amp ${disabled ? 'off' : ''}`}>
       <span>{label}</span>
       <input
-        type="range" min={0} max={2} step={0.05} value={value} disabled={disabled}
+        type="range" min={min} max={max} step={step} value={value} disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
       />
     </label>

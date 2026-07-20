@@ -91,7 +91,13 @@ export async function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
-export function analyzeAnatomy(img: HTMLImageElement): Anatomy {
+export interface AnalyzeOptions {
+  /** pattern-scan sensitivity, 0 strict … 1 fine; 0.5 = default */
+  sensitivity?: number;
+}
+
+export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {}): Anatomy {
+  const sensitivity = Math.max(0, Math.min(1, opts.sensitivity ?? 0.5));
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
   const scale = ANALYSIS_LONG_SIDE / Math.max(iw, ih);
@@ -364,13 +370,14 @@ export function analyzeAnatomy(img: HTMLImageElement): Anatomy {
   let maxHalfPx = 0;
   for (let b = 0; b < BINS; b++) maxHalfPx = Math.max(maxHalfPx, halfWS[b]);
   const { compOf, markings } = findPatterns({
-    w, h, data, gridIdx, n, xs, ys, cols, halfWidthPx: maxHalfPx,
+    w, h, data, gridIdx, n, xs, ys, cols, halfWidthPx: maxHalfPx, sensitivity,
   });
-  // keep the biggest MAX_ZONES markings
+  // keep the biggest markings — a fine scan is allowed to keep more of them
+  const maxZones = Math.round(MAX_ZONES * (0.5 + sensitivity));
   const order = markings
     .map((m, id) => ({ m, id }))
     .sort((p, q) => q.m.size - p.m.size)
-    .slice(0, MAX_ZONES);
+    .slice(0, maxZones);
   const remap = new Int32Array(markings.length).fill(-1);
   order.forEach((e, newId) => (remap[e.id] = newId));
   const zoneOf = new Int32Array(n);

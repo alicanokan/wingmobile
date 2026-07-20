@@ -54,10 +54,13 @@ interface Input {
   cols: number[];
   /** typical half-width of the feather in px — sets the background scale */
   halfWidthPx: number;
+  /** 0 strict (only bold markings) … 1 fine (dig out faint speckles); 0.5 = default */
+  sensitivity?: number;
 }
 
 export function findPatterns(inp: Input): PatternResult {
   const { w, h, data, gridIdx, n, xs, ys, cols, halfWidthPx } = inp;
+  const sens = Math.max(0, Math.min(1, inp.sensitivity ?? 0.5));
 
   // ---- 1. integral images (mask-aware) -----------------------------------
   const W1 = w + 1;
@@ -130,7 +133,10 @@ export function findPatterns(inp: Input): PatternResult {
   let sd = 0;
   for (let k = 0; k < n; k++) sd += (dev[k] - mean) * (dev[k] - mean);
   sd = Math.sqrt(sd / (n || 1));
-  const thresh = Math.max(0.018, mean + 0.15 * sd);
+  // Sensitivity slides both the absolute floor and how far above the mean a
+  // residual must sit. At 0.5 this is exactly the old fixed threshold; toward
+  // 1 it digs out faint speckles, toward 0 it keeps only the boldest markings.
+  const thresh = Math.max(0.006 + 0.024 * (1 - sens), mean + (0.45 - 0.6 * sens) * sd);
 
   // ---- 4. connected components, sign-separated ---------------------------
   const compOf = new Int32Array(n).fill(-1);
@@ -166,7 +172,10 @@ export function findPatterns(inp: Input): PatternResult {
   }
 
   // ---- 5. shape per component --------------------------------------------
-  const minSize = Math.max(12, Math.round(n * 0.00015));
+  // minimum marking size follows sensitivity: a fine scan keeps small flecks,
+  // a strict one drops them (×1 at 0.5, ×4 at 0, ×0.25 at 1)
+  const fine = Math.pow(4, 1 - 2 * sens);
+  const minSize = Math.max(4, Math.round(Math.max(12, n * 0.00015) * fine));
   const markings: Marking[] = [];
   const remap = new Int32Array(comps.length).fill(-1);
   comps.forEach((c, id) => {
