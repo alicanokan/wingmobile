@@ -6,6 +6,7 @@ import CamSender from './sim/CamSender.tsx';
 import Controller from './sim/Controller.tsx';
 import Conductor from './sim/Conductor.tsx';
 import Experience from './sim/Experience.tsx';
+import Feather2 from './feather2/Feather2.tsx';
 
 // Entry points on one app: the operator console (/), a display-only projection
 // (/feather) for a second screen, a phone camera sender (/cam), a phone
@@ -25,6 +26,8 @@ createRoot(document.getElementById('root')!).render(
     <Conductor />
   ) : path.endsWith('/experience') ? (
     <Experience />
+  ) : path.endsWith('/feather2') ? (
+    <Feather2 />
   ) : (
     <StrictMode>
       <App />

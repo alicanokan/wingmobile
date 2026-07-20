@@ -47,6 +47,11 @@ export function Landing({ onPick }: { onPick: (m: EntryMode) => void }) {
           Experience
           <small>presets · phone control · mix</small>
         </button>
+        <button className="wb-landing-btn" onClick={() => (location.href = '/feather2')}>
+          <span className="wb-landing-glyph">❋</span>
+          Feather Lab
+          <small>anatomy engine · audio reactive</small>
+        </button>
       </div>
     </div>
   );
