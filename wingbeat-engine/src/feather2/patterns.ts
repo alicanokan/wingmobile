@@ -34,6 +34,8 @@ export interface Marking {
   elong: number;
   round: boolean;
   sign: number; // +1 lighter than background, -1 darker
+  /** mean residual over the component — how BOLD the marking is, 0..~1 */
+  str: number;
 }
 
 export interface PatternResult {
@@ -180,10 +182,11 @@ export function findPatterns(inp: Input): PatternResult {
   const remap = new Int32Array(comps.length).fill(-1);
   comps.forEach((c, id) => {
     if (c.px.length < minSize) return;
-    let mx = 0, my = 0;
+    let mx = 0, my = 0, str = 0;
     for (const p of c.px) {
       mx += xs[p];
       my += ys[p];
+      str += dev[p];
     }
     const cnt = c.px.length;
     mx /= cnt;
@@ -226,6 +229,7 @@ export function findPatterns(inp: Input): PatternResult {
       elong,
       round: elong < 2.2,
       sign: c.sign,
+      str: str / cnt,
     });
   });
 

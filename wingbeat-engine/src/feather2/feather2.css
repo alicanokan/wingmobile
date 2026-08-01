@@ -231,6 +231,58 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- live audio readout -------------------------------------------------- */
+.f2-meters { margin-top: 10px; }
+.f2-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 30px;
+  padding: 0 1px;
+}
+.f2-bars label {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  background: #14141c;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.f2-bars label span {
+  display: block;
+  width: 100%;
+  height: 2%;
+  background: linear-gradient(#c4a7ff, #7c3aed);
+  transition: height 0.05s linear;
+}
+.f2-hits {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+}
+.f2-hits em {
+  font-style: normal;
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 3px 6px;
+  border-radius: 999px;
+  border: 1px solid #2c2c38;
+  color: #d8d0ff;
+  background: #7c3aed;
+  opacity: 0.15;
+}
+.f2-phase {
+  margin-left: auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #c4a7ff;
+  opacity: 0.85;
+}
+
 .f2-kind {
   display: flex;
   align-items: baseline;

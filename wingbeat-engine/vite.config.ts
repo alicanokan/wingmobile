@@ -43,4 +43,27 @@ export default defineConfig({
     host: true, // expose on LAN so the same machine can also reach the MQTT broker
     port: 5173,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // three.js is by far the heaviest dependency and it never changes
+        // between deploys. Splitting it (and React) off means a visitor who
+        // has been here before only re-downloads the app code, and the app
+        // chunk stays small enough to parse quickly on a phone.
+        // Assigned by module path rather than by package name: the name form
+        // puts a shared dependency in whichever group claimed it first, which
+        // buried react-dom inside the r3f chunk and left `react` empty.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('/three/')) return 'three';
+          // kept apart from `three`: /feather2 drives raw three.js and has no
+          // reason to pull the react-three wrappers down with it
+          if (id.includes('@react-three')) return 'r3f';
+          if (/\/(react|react-dom|scheduler)\//.test(id)) return 'react';
+          if (id.includes('/tone/')) return 'audio';
+          if (/\/(mqtt|peerjs|qrcode)|@supabase/.test(id)) return 'net';
+        },
+      },
+    },
+  },
 });
