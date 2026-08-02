@@ -61,7 +61,21 @@ export interface AudioFeatures {
   pitch: number; // 0..1 dominant pitch class
 
   idle: number; // 1 when there is nothing to listen to
+
+  // --- musical elements (see elements.ts) — auto-gained 0..1 ---
+  perc: number; // percussive stream: all the hits, drums or not
+  bassline: number; // PITCHED low end, with the kick transient masked out
+  lead: number; // the dominant melodic line above the bass
+  vocal: number; // centre-extracted, voice-band, harmonic
+  pad: number; // sustained chordal remainder
+  space: number; // side-channel top end: reverb tails, wideners
+  noteOn: number; // decaying pulse each time the lead changes note
+  vibrato: number; // 0..1 how much the lead is wobbling — the sung-line tell
+  leadNote: number; // 0..1 pitch class of the lead, -1 when untracked
+  bassNote: number; // 0..1 pitch class of the bass, -1 when untracked
 }
+
+import { ElementAnalyser } from './elements.ts';
 
 const FFT = 2048;
 const HIST = 43; // ~0.7 s of flux history at 60 fps
@@ -203,12 +217,33 @@ export class AudioFeed {
   private micStream: MediaStream | null = null;
   private micSrc: MediaStreamAudioSourceNode | null = null;
 
+  // stereo tap — the element analyser needs both channels in the TIME domain,
+  // because centre extraction lives in the phase relationship between them and
+  // AnalyserNode.getByteFrequencyData has already thrown phase away
+  private upmix: GainNode | null = null;
+  private splitter: ChannelSplitterNode | null = null;
+  private anL: AnalyserNode | null = null;
+  private anR: AnalyserNode | null = null;
+  private timeL = new Float32Array(0);
+  private timeR = new Float32Array(0);
+  private elements = new ElementAnalyser(FFT);
+  private noteSm = 0;
+  private leadNoteV = -1;
+  private bassNoteV = -1;
+  private vibratoSm = 0;
+
   private nSub = new Norm();
   private nBass = new Norm();
   private nBody = new Norm();
   private nMid = new Norm();
   private nHigh = new Norm();
   private nAir = new Norm();
+  private nPerc = new Norm();
+  private nBassL = new Norm();
+  private nLead = new Norm();
+  private nVocal = new Norm();
+  private nPad = new Norm();
+  private nSpace = new Norm();
   private oKick = new Onset();
   private oSnare = new Onset();
   private oHat = new Onset();
@@ -239,8 +274,37 @@ export class AudioFeed {
       // low smoothing: onsets need the transient intact
       this.analyser.smoothingTimeConstant = 0.35;
       this.bins = new Uint8Array(this.analyser.frequencyBinCount);
+
+      // ChannelSplitter is spec-locked to discrete interpretation, so a MONO
+      // input puts the signal on output 0 and SILENCE on output 1. getUserMedia
+      // hands back a mono track on almost every laptop mic, which made side ==
+      // mid: "Space" read maximal on a source with no stereo width at all, and
+      // the vocal centre-extraction lost ~8 dB. This gain node up-mixes with
+      // speaker rules first, so mono arrives as a true L == R pair.
+      this.upmix = this.ctx.createGain();
+      this.upmix.channelCount = 2;
+      this.upmix.channelCountMode = 'explicit';
+      this.upmix.channelInterpretation = 'speakers';
+      this.splitter = this.ctx.createChannelSplitter(2);
+      this.upmix.connect(this.splitter);
+      this.anL = this.ctx.createAnalyser();
+      this.anR = this.ctx.createAnalyser();
+      for (const a of [this.anL, this.anR]) {
+        a.fftSize = FFT;
+        a.smoothingTimeConstant = 0; // raw samples: we run our own window
+      }
+      this.splitter.connect(this.anL, 0);
+      this.splitter.connect(this.anR, 1);
+      this.timeL = new Float32Array(FFT);
+      this.timeR = new Float32Array(FFT);
     }
     return this.ctx;
+  }
+
+  /** Feed a source into both the band analyser and the stereo element tap. */
+  private tap(node: AudioNode): void {
+    node.connect(this.analyser!);
+    node.connect(this.upmix!);
   }
 
   /** Play a music file out loud and analyse it. */
@@ -252,7 +316,7 @@ export class AudioFeed {
       this.el = new Audio();
       this.el.loop = true;
       this.elSrc = ctx.createMediaElementSource(this.el);
-      this.elSrc.connect(this.analyser!);
+      this.tap(this.elSrc);
       this.elSrc.connect(ctx.destination); // music is meant to be heard
     }
     this.el.src = URL.createObjectURL(file);
@@ -267,7 +331,7 @@ export class AudioFeed {
     this.pauseFile();
     this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     this.micSrc = ctx.createMediaStreamSource(this.micStream);
-    this.micSrc.connect(this.analyser!);
+    this.tap(this.micSrc);
     this.sourceLabel = 'microphone';
   }
 
@@ -321,8 +385,42 @@ export class AudioFeed {
     const dt = this.lastT ? Math.min(0.1, (now - this.lastT) / 1000) : 1 / 60;
     this.lastT = now;
 
-    if (this.analyser && this.active) this.analyser.getByteFrequencyData(this.bins);
+    const live = !!this.analyser && this.active;
+    if (live) this.analyser!.getByteFrequencyData(this.bins);
     else this.bins.fill(0);
+
+    // --- musical elements ----------------------------------------------------
+    let perc = 0, bassline = 0, lead = 0, vocal = 0, pad = 0, space = 0;
+    if (live && this.anL && this.anR && this.ctx) {
+      this.anL.getFloatTimeDomainData(this.timeL);
+      this.anR.getFloatTimeDomainData(this.timeR);
+      const e = this.elements.analyse(this.timeL, this.timeR, this.ctx.sampleRate, dt);
+      perc = this.nPerc.push(e.perc, dt);
+      bassline = this.nBassL.push(e.bass, dt);
+      lead = this.nLead.push(e.lead, dt);
+      vocal = this.nVocal.push(e.vocal, dt);
+      pad = this.nPad.push(e.pad, dt);
+      space = this.nSpace.push(e.air, dt);
+      this.leadNoteV = e.leadNote;
+      this.bassNoteV = e.bassNote;
+      this.vibratoSm += (e.vibrato - this.vibratoSm) * Math.min(1, dt * 5);
+      if (e.noteChanged) this.noteSm = 1;
+    } else {
+      // Norm.pk only decays inside push(), so skipping these entirely left the
+      // six element rows pinned to a loud track's peak — they read near zero
+      // for 10-20 s after switching to a quiet one while the four band rows,
+      // which are always fed, adapted immediately.
+      perc = this.nPerc.push(0, dt);
+      bassline = this.nBassL.push(0, dt);
+      lead = this.nLead.push(0, dt);
+      vocal = this.nVocal.push(0, dt);
+      pad = this.nPad.push(0, dt);
+      space = this.nSpace.push(0, dt);
+      this.vibratoSm *= Math.exp(-dt / 0.5);
+      this.leadNoteV = -1;
+      this.bassNoteV = -1;
+    }
+    this.noteSm *= Math.exp(-dt / 0.14);
 
     const rawSub = this.band(20, 60);
     const rawBass = this.band(60, 160);
@@ -480,6 +578,12 @@ export class AudioFeed {
       pitch,
 
       idle: Math.max(0, Math.min(1, this.idleSm)),
+
+      perc, bassline, lead, vocal, pad, space,
+      noteOn: this.noteSm,
+      vibrato: this.vibratoSm,
+      leadNote: this.leadNoteV,
+      bassNote: this.bassNoteV,
     };
   }
 }
