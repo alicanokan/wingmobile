@@ -61,6 +61,9 @@ const ABERRATION = {
 import { FEATHERS } from '../sim/feathers.ts';
 import { analyzeAnatomy, loadImage, type Anatomy, PART } from './anatomy.ts';
 import { AudioFeed, type AudioFeatures } from './audio2.ts';
+import { ledService } from '../led/ledService.ts';
+import type { FeatherPart, PartColor } from '../led/types.ts';
+import { ELEMENTS, type ElementId } from '../led/elements.ts';
 
 // scan + response settings survive reloads, so a tuned analysis is kept
 const SENS_KEY = 'f2.sensitivity';
@@ -129,23 +132,6 @@ const ROUTES_KEY = 'f2.routes';
 /** Ceiling on any one column's summed drive — see the render loop. */
 const DRIVE_MAX = 1.6;
 
-/** Row order is roughly rhythm → pitch → texture, which reads top to bottom. */
-const ELEMENTS = [
-  { id: 'sub', label: 'Sub', hint: 'the floor you feel, 20–60 Hz' },
-  { id: 'kick', label: 'Kick', hint: 'low-band transient' },
-  { id: 'snare', label: 'Snare', hint: 'shell-band transient' },
-  { id: 'hat', label: 'Hat', hint: 'top-band transient' },
-  { id: 'perc', label: 'Perc', hint: 'everything percussive, drums or not' },
-  { id: 'bass', label: 'Bass', hint: 'pitched low end, kick removed' },
-  { id: 'lead', label: 'Lead', hint: 'the dominant melodic line' },
-  { id: 'vocal', label: 'Vocal', hint: 'centre-extracted voice' },
-  { id: 'pad', label: 'Pad', hint: 'sustained chordal bed' },
-  { id: 'space', label: 'Space', hint: 'stereo sides: reverb, wideners' },
-  { id: 'note', label: 'Note', hint: 'pulses when the lead changes note' },
-  { id: 'vibrato', label: 'Vibrato', hint: 'how much the lead WOBBLES — the sung-line tell' },
-  { id: 'bright', label: 'Bright', hint: 'spectral centroid: dark mix … brilliant one' },
-] as const;
-type ElementId = (typeof ELEMENTS)[number]['id'];
 
 const TARGETS = [
   { id: 'eye', label: 'Markings', short: 'MRK' },
@@ -703,6 +689,37 @@ export default function Feather2() {
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
+    // Mean colour of each anatomical part, for LED "mirror" mode. The shader
+    // colours particles on the GPU, so the CPU has no per-part colour to send
+    // a strip — but the source data does, and it never changes for a given
+    // feather, so it is worth exactly one pass at load.
+    const PART_OF: Record<number, FeatherPart> = {
+      [PART.calamus]: 'calamus', [PART.rachis]: 'rachis', [PART.barbs]: 'vane',
+      [PART.down]: 'down', [PART.eye]: 'markings',
+    };
+    const partMean: Partial<Record<FeatherPart, PartColor>> = {};
+    {
+      const acc: Record<string, { r: number; g: number; b: number; n: number }> = {};
+      for (let i = 0; i < anatomy.count; i++) {
+        const key = PART_OF[anatomy.part[i]];
+        if (!key) continue;
+        const a = (acc[key] ??= { r: 0, g: 0, b: 0, n: 0 });
+        a.r += anatomy.rgb[i * 3];
+        a.g += anatomy.rgb[i * 3 + 1];
+        a.b += anatomy.rgb[i * 3 + 2];
+        a.n++;
+      }
+      for (const key in acc) {
+        const a = acc[key];
+        // normalise to the brightest channel: a strip has its own brightness
+        // control, and a dim photo should still give a saturated light
+        const peak = Math.max(a.r, a.g, a.b) / a.n || 1;
+        partMean[key as FeatherPart] = {
+          r: a.r / a.n / peak, g: a.g / a.n / peak, b: a.b / a.n / peak, level: 0,
+        };
+      }
+    }
+
     const cloud = new THREE.Points(geo, mat);
 
     // THE GHOST — the same cloud, one beat behind, like a delay send on the
@@ -845,6 +862,8 @@ export default function Feather2() {
       elemVals.pad = f.pad;
       elemVals.space = f.space;
       elemVals.note = f.noteOn;
+      elemVals.vibrato = f.vibrato;
+      elemVals.bright = f.bright;
 
       const R = routes.current;
       for (const t of TARGETS) drive[t.id] = 0;
@@ -931,6 +950,20 @@ export default function Feather2() {
       uniforms.uNoteLight.value = Math.min(1, cap(drive.eye) * 0.35 + f.noteOn * 0.5) * a.eye;
       uniforms.uRate.value = f.bpm > 0 ? Math.max(0.5, Math.min(2, f.bpm / 110)) : 1;
 
+      // ---- feed the light rig ------------------------------------------------
+      // The router rate-gates internally, so calling this every frame is cheap:
+      // most frames it does the comparison and returns nothing.
+      for (const k in partMean) {
+        const pm = partMean[k as FeatherPart]!;
+        pm.level =
+          k === 'rachis' ? Math.min(1, uniforms.uDrvFlex.value)
+          : k === 'vane' ? Math.min(1, uniforms.uDrvWave.value)
+          : k === 'down' ? Math.min(1, uniforms.uDrvFringe.value)
+          : k === 'markings' ? Math.min(1, uniforms.uDrvEye.value)
+          : Math.min(1, uniforms.uDrvFlex.value * 0.5);
+      }
+      ledService.push({ elements: elemVals, leadNote: f.leadNote, parts: partMean });
+
       // record this frame, then play back the frame from one beat ago
       const gk = [
         uniforms.uDrvEye.value, uniforms.uDrvFlex.value, uniforms.uDrvWave.value,
@@ -974,6 +1007,7 @@ export default function Feather2() {
     if (location.hostname === 'localhost') {
       (window as unknown as { __f2?: unknown }).__f2 = {
         feed,
+        led: ledService,
         bloom: () => bloomPass.strength,
         aberr: () => aberrPass.uniforms.amount.value,
         zoom: () => camera.zoom,

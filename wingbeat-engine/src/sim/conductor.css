@@ -60,7 +60,7 @@
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(480px, 1.75fr);
+  grid-template-columns: minmax(300px, 1fr) minmax(420px, 1.5fr) minmax(320px, 1fr);
   gap: 12px;
   padding: 14px 12px 8px;
   align-items: stretch;
@@ -832,3 +832,44 @@
 /* four limit/time boxes wrap on narrow panels rather than squeezing */
 .cond-reach-lims { flex-wrap: wrap; row-gap: 4px; }
 .cond-reach-lims input { width: 46px; }
+
+/* ---- Light Engine -------------------------------------------------------- */
+.cond-engine-light { min-width: 0; }
+.cond-led-link { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+.cond-led-url {
+  flex: 1 1 auto; min-width: 0; font-size: 11px; padding: 5px 7px;
+  background: #101018; border: 1px solid #26263a; border-radius: 6px; color: #d8d8e4;
+}
+.cond-led-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: #444;
+}
+.cond-led-dot.connected { background: #4ade80; box-shadow: 0 0 6px #4ade8088; }
+.cond-led-dot.connecting { background: #e8c56a; }
+.cond-led-dot.error { background: #e0556b; }
+.cond-led-stat { font-size: 10px; color: #7a7a8c; margin-bottom: 8px; }
+.cond-led-warn { color: #e0a05b; font-style: normal; }
+.cond-led-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+.cond-led-fixtures { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.cond-led-fx { border: 1px solid #23233a; border-radius: 8px; padding: 8px; background: #0e0e16; }
+.cond-led-fx-head { display: flex; gap: 7px; align-items: center; margin-bottom: 6px; }
+.cond-led-fx-head b { font-size: 11px; letter-spacing: 0.04em; }
+.cond-led-swatch {
+  width: 22px; height: 14px; border-radius: 3px; margin-left: auto;
+  border: 1px solid #2a2a3c; flex: 0 0 auto;
+}
+.cond-led-swatch.sm { width: 14px; height: 10px; margin-left: 0; }
+.cond-led-gains { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 6px; }
+.cond-led-gain {
+  font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 3px 6px; border-radius: 4px; cursor: pointer;
+  border: 1px solid #26263a; background: #14141f; color: #8a8a9c;
+}
+.cond-led-gain.half { background: #4c2a91; color: #e8e0ff; border-color: #4c2a91; }
+.cond-led-gain.full { background: #7c3aed; color: #fff; border-color: #7c3aed; }
+.cond-led-trace {
+  font-size: 10px; color: #8a8a9c; max-height: 150px; overflow-y: auto;
+  font-variant-numeric: tabular-nums;
+}
+.cond-led-trace-row { display: flex; gap: 7px; align-items: center; padding: 1px 0; }
+.cond-led-trace-row b { color: #b8b8c8; min-width: 74px; }
+.cond-led-trace-row em { margin-left: auto; font-style: normal; color: #6a6a7c; }

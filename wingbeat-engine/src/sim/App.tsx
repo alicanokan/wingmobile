@@ -424,12 +424,30 @@ export default function App() {
     }
   }, [needCam, cam]);
 
-  // Central input router (sim only): once per frame, resolve every active
-  // source → slot → part(s) and drive the engine. Parts no source touches are
-  // left to the operator map. Devices are read exactly once per frame here.
+  // Central input router: once per frame, resolve every active source → slot →
+  // part(s) and drive the engine. Parts no source touches are left to the
+  // operator map. Devices are read exactly once per frame here.
+  //
+  // This used to bail unless the transport was SimTransport, which meant
+  // connecting real hardware silently killed the mic, camera, keyboard and
+  // phone — you could have live input OR an ESP link, never both, so the
+  // installation could never be driven by the music it was standing in. The
+  // SimTransport methods it called were only thin wrappers over engine.ingest*,
+  // so the router now talks to the engine directly and works under any
+  // transport. Real sensor packets still arrive over MQTT and land in the same
+  // place; whichever spoke last for a node wins.
   useEffect(() => {
-    if (transport?.kind !== 'sim') return;
-    const sim = transport as SimTransport;
+    if (!transport) return;
+    const simT = transport.kind === 'sim' ? (transport as SimTransport) : null;
+    const sim = {
+      blow: (id: string, v: number) => (simT ? simT.blow(id, v) : engine.ingestWind(id, v)),
+      holdWind: (id: string, v: number) =>
+        simT ? simT.holdWind(id, v) : engine.ingestWind(id, Math.min(1, Math.max(0, v))),
+      releaseWind: (id: string) => (simT ? simT.releaseWind(id) : engine.ingestWind(id, 0)),
+      shake: (id: string, m: number) => (simT ? simT.shake(id, m) : engine.ingestMotion(id, m)),
+      setPresence: (id: string, p: boolean) =>
+        simT ? simT.setPresence(id, p) : engine.ingestPresence(id, p),
+    };
     let raf = 0;
     let meterTick = 0;
     let lastT = 0;

@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './ui.css';
 import './conductor.css';
 import { FEATHERS, DEFAULT_FEATHER } from './feathers.ts';
+import { LedPanel } from './LedPanel.tsx';
 import { SENSOR_CHANNELS } from './channels.ts';
 import { SCENES } from '../engine/scenes.ts';
 import { WingbeatEngine } from '../engine/WingbeatEngine.ts';
@@ -1038,6 +1039,10 @@ export default function Conductor() {
             </div>
           </div>
         </section>
+
+        {/* ═══════════ LIGHT ENGINE ═══════════ */}
+        <LedPanel />
+
       </div>
 
       {/* ═══════════ GLOBAL REACTION + PRESETS ═══════════ */}
