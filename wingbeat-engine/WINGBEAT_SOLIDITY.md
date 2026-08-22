@@ -65,11 +65,28 @@
   `/conductor` header has a secret field next to Live mode. Also fixed the
   dead `skipFirstLivePush` guard (enabling Live mode no longer instantly
   broadcasts the on-screen config).
-- ⏳ **Stage 2 — the flip**: `supabase/lockdown_after_deploy.sql` is staged in
-  the repo. **Run it only after the new client is deployed to wingbeat.art**
-  (old client's direct upserts break at that moment, by design). Public
-  becomes read-only on all tables; storage keeps read + insert, loses
-  update/delete. Until it runs, the hole is still open.
+- ✅ **Stage 2 — the flip (done 2026-08-22, see changelog below).**
+
+---
+
+## Changelog — 2026-08-22, deployed + locked down (takeover hole CLOSED)
+
+- ✅ **Deployed**: commit `6a3cdf4` (all quick wins + RLS stage 1) pushed to
+  `main` and shipped to wingbeat.art via `vercel deploy --prod`
+  (`dpl_FsQq7NUPkdH5KstwkJkwu1tZ8wse`, bundle `index-EEUlIDdw.js`).
+- ✅ **DB flipped**: migration `wingbeat_lockdown_public_writes` applied to
+  `ralyyojiwvnsqdnxkfwb` (= `supabase/lockdown_after_deploy.sql`). Public role
+  is now SELECT-only on `wingbeat_live / presets / samples`; storage bucket
+  keeps read + insert, lost update + delete.
+- ✅ **Verified against the live API with the public key**: anon read 200;
+  anon UPDATE live → 0 rows (row untouched); anon INSERT preset → 401 RLS
+  violation; anon DELETE samples → 0 rows; RPC with wrong secret → 403
+  `bad conductor secret`; RPC with the real secret → save/list/delete
+  round-trip clean. Show-stopper #13 is closed.
+- ⚠️ **Operator step**: paste the conductor secret into the `/conductor`
+  header field on the conducting laptop (kept in `wb.conductorSecret.v1`).
+  Without it, Push live / preset save / sample upload fail with a clear
+  message — by design.
 
 ---
 
@@ -103,7 +120,7 @@ the controls and the health checks that sim mode has, and almost every failure
 | 10 | **Console reload orphans every phone.** Device IDs/codes are re-minted randomly per mount, never persisted; PeerJS has no `disconnected` handling, no re-dial, 4 lifetime attempts. | `net/link.ts:99-100,150-175,218` | One refresh = re-display 5 QR codes and re-pair every phone mid-show. |
 | 11 | **`/feather` projection has zero audio reactivity.** Display window creates an AudioEngine but never `attach()`/`init()`, so `audioReady` never fires, loops park forever, `getLevel()` reads 0. | `sim/FeatherView.tsx:23,31` | The actual second-screen projection — the thing the audience sees — doesn't react to sound. |
 | 12 | **"Pushed live ✓" can be a lie.** Realtime subscribe has no status callback, `getLive` failure looks like "nothing pushed", failed sample downloads are `console.warn`, one hung fetch (no timeout/abort) blocks remaining loops. | `net/cloud.ts:156-166,140-144`, `net/liveSync.ts:25-38,120` | Conductor sees success; some devices never got the push, some sensors stay silent, no UI anywhere says so. |
-| 13 | **Anyone can take over the installation (verify RLS).** No auth anywhere; anon key upserts `wingbeat_live` id=1, upserts presets, deletes storage. No SQL/policies in repo to prove writes are restricted. | `net/supabaseClient.ts:6-9`, `net/cloud.ts:116-153` | If RLS allows anon writes, any visitor to wingbeat.art can push their config to every device in the venue. |
+| 13 | ~~**Anyone can take over the installation.**~~ **FIXED 2026-08-22** — writes go through secret-gated SECURITY DEFINER RPCs; public role is read-only (migrations `wingbeat_secret_gated_writes` + `wingbeat_lockdown_public_writes`). Verified live. | `net/cloud.ts`, `supabase/` | Was: any visitor to wingbeat.art could push their config to every device in the venue. Now: needs the conductor secret. |
 | 14 | **The `/cam` phone-camera feature is entirely dead.** Relay is a Vite-dev-only plugin (404s on Vercel), nothing consumes it (no `'net'` source in `inputs.ts`), and its only UI (`PhonePanel`) is orphaned. | `vite.config.ts:11-40`, `sim/camNet.ts`, `sim/PhonePanel.tsx` | Docs promise a feature that has never been wired; stage time burned debugging it. |
 
 ---
