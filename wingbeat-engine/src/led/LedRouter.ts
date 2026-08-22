@@ -102,18 +102,30 @@ export class LedRouter {
     return this.sent.get(id)?.cmd ?? null;
   }
 
-  /** Resolve one fixture to a command, before any rate or change gating. */
-  private resolve(fx: LedFixture, inp: LedInputs): LedCommand {
+  /**
+   * Resolve one fixture to a command, before any rate or change gating.
+   *
+   * Returns NULL when this tick cannot speak for the fixture: the inputs it
+   * needs were not supplied (the console carries `sensors`, /feather2 carries
+   * `elements` + `parts`; each page runs its own router over the SAME fixture
+   * list), or the fixture belongs to the engine pipeline. A null is skipped
+   * entirely — no packet, no heartbeat — so two producers never fight over a
+   * node by publishing each other's fixtures black. Blackout wins over all of
+   * it: whoever ticks sends `off`, and `off` is idempotent.
+   */
+  private resolve(fx: LedFixture, inp: LedInputs): LedCommand | null {
     const master = inp.master ?? 1;
     const off: LedCommand = { mode: 'off', r: 0, g: 0, b: 0, intensity: 0 };
     if (inp.blackout || fx.source === 'off') return off;
+    if (fx.source === 'engine') return null;
 
     let r = 0, g = 0, b = 0, level = 0;
 
     if (fx.source === 'elements') {
+      if (!inp.elements) return null;
       // sum the routed elements, exactly as the visual matrix does
       let sum = 0;
-      const els = inp.elements ?? {};
+      const els = inp.elements;
       for (const key in fx.gains) {
         const gain = fx.gains[key];
         const v = els[key];
@@ -134,14 +146,16 @@ export class LedRouter {
         r = c.r; g = c.g; b = c.b;
       }
     } else if (fx.source === 'sensor') {
-      const s = inp.sensors?.[fx.id];
-      if (!s) return off;
+      if (!inp.sensors) return null;
+      const s = inp.sensors[fx.id];
+      if (!s) return off; // we carry sensors, and this node isn't one
       // wind carries the brightness, motion adds a lift, presence sets a floor
       level = clamp01(s.wind * 0.8 + Math.min(1, s.motion) * 0.35 + (s.present ? 0.12 : 0));
       const c = hsv(s.hue, 0.8, 1);
       r = c.r; g = c.g; b = c.b;
     } else if (fx.source === 'mirror') {
-      const p = inp.parts?.[fx.part as FeatherPart];
+      if (!inp.parts) return null;
+      const p = inp.parts[fx.part as FeatherPart];
       if (!p) return off;
       r = to255(p.r); g = to255(p.g); b = to255(p.b);
       level = clamp01(p.level);
@@ -177,6 +191,12 @@ export class LedRouter {
       if (prev && now - prev.at < this.minIntervalMs) continue; // rate gate
 
       const cmd = this.resolve(fx, inp);
+      if (!cmd) {
+        // not ours to speak for this tick — forget it so a later owner change
+        // (or blackout) publishes fresh rather than being change-gated away
+        this.sent.delete(fx.id);
+        continue;
+      }
       if (!prev) {
         this.sent.set(fx.id, { cmd, at: now });
         out.push({ id: fx.id, cmd, reason: 'changed' });

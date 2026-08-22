@@ -118,7 +118,12 @@ export function useConductorSync({ engine, audio, onFeather }: ConductorSyncOpts
     };
 
     getLive().then(apply).catch(() => {});
-    const offLive = onLiveChange(apply);
+    // Every time the realtime channel (re)connects, re-read the row: a push
+    // that happened while this device was offline would otherwise be missed
+    // until the next one, and `apply` dedupes by updated_at so it's cheap.
+    const offLive = onLiveChange(apply, (s) => {
+      if (s === 'live') getLive().then(apply).catch(() => {});
+    });
     const offReady = engine.on('audioReady', () => {
       const cfg = pendingLoops.current;
       if (cfg) {

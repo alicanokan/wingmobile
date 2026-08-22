@@ -9,12 +9,16 @@
 // ============================================================================
 
 import type { FeatherPreset } from './rig.ts';
+import type { RemoteLevels } from '../engine/AudioEngine.ts';
 
 export interface SyncState {
   nodes: { i: string; w: number; p: boolean }[];
   scene: string;
   feather: string;
   palette: number[][];
+  /** the console's live audio levels, so a display window with no audio
+   *  context of its own is still audio-reactive (see AudioEngine.setRemoteLevels) */
+  audio?: RemoteLevels;
 }
 
 export type SyncMsg =

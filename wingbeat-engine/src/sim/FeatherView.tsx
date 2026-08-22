@@ -1,10 +1,13 @@
 // ============================================================================
 //  /feather — display-only projection for a second screen.
 //
-//  Runs its own engine + (silent) audio and mirrors the console over the sync
-//  channel: it applies the broadcast wind/presence/scene/palette and loads the
-//  rig snapshot when it changes. Open it in a separate window and go fullscreen
-//  while the console stays on your main screen. No controls — just the feather.
+//  Runs its own engine + a SILENT AudioEngine and mirrors the console over the
+//  sync channel: it applies the broadcast wind/presence/scene/palette, loads
+//  the rig snapshot when it changes, and feeds the console's live audio
+//  LEVELS into its AudioEngine (setRemoteLevels) so the projection reacts to
+//  the sound without this window ever unlocking an audio context — one
+//  machine, one set of speakers, no doubled audio. Open it in a separate
+//  window and go fullscreen while the console stays on your main screen.
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -20,7 +23,7 @@ import { useConductorSync } from '../net/liveSync.ts';
 
 export default function FeatherView() {
   const engine = useMemo(() => new WingbeatEngine(), []);
-  const audio = useMemo(() => new AudioEngine(), []); // silent here — visuals only
+  const audio = useMemo(() => new AudioEngine(), []); // silent — levels are mirrored from the console
   const [feather, setFeather] = useState(DEFAULT_FEATHER);
   const [waiting, setWaiting] = useState(true);
   const [isFull, setIsFull] = useState(false);
@@ -77,6 +80,7 @@ export default function FeatherView() {
           engine.ingestPresence(n.i, n.p);
         }
         if (s.palette?.length) engine.setFeatherPalette(s.palette);
+        if (s.audio) audio.setRemoteLevels(s.audio);
         setFeather((f) => (f !== s.feather ? s.feather : f));
       } else if (m.kind === 'rig') {
         loadIntoRig(m.preset);
@@ -88,7 +92,10 @@ export default function FeatherView() {
         }
       }
     });
-  }, [engine]);
+  }, [engine, audio]);
+
+  // Release the (never-started) graph if this window is torn down.
+  useEffect(() => () => audio.dispose(), [audio]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: '#050507' }}>

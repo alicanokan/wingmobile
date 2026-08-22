@@ -88,6 +88,67 @@
   Without it, Push live / preset save / sample upload fail with a clear
   message — by design.
 
+## Changelog — 2026-08-22 (later), Phase 1 "un-dead the show path"
+
+Typecheck + build clean; router/arbiter logic covered by a headless Node test
+(15 assertions, all pass).
+
+- ✅ **LED arbitration (decision Q1 — keep both pipelines)**. Every `cmd/led`
+  payload now carries `src: engine | router | identify` (firmware ignores the
+  extra key). `ledService` implements a `LedArbiter`; `MqttTransport` takes it
+  (`new MqttTransport({ url, led: ledService })`) and asks `engineMayDrive(id)`
+  before every event-driven publish. Rule per node: blackout → only `off`;
+  identify flash wins; fixture source `engine` (new) or no fixture → engine;
+  a router stream seen on the wire in the last 3.5 s → router; otherwise →
+  engine. Liveness is measured on the broker, so it works across tabs. When a
+  stream stops or blackout lifts the transport **re-asserts** the engine's
+  last colour (1 s sweep), so a strip never freezes on the router's last
+  frame. Blackout now also sends `off` to every engine node, not just
+  patched fixtures.
+- ✅ **Two routers, one fixture list, no fight**. `LedRouter.resolve` returns
+  `null` (skip — no packet, no heartbeat) for fixtures whose inputs this
+  page didn't supply: the console carries `sensors` + `sceneLed`, `/feather2`
+  carries `elements` + `parts`. Before, `/feather2` published every `sensor`
+  fixture black every 2 s.
+- ✅ **Sensor-driven strips finally lit**: the console feeds
+  `ledService.push({ sensors, sceneLed })` at 25 Hz (hue degrees → 0..1 at
+  the boundary). "Sensor" fixtures and "Elements · scene" hues had no data
+  source until now. `Engine` added to the fixture Source dropdown.
+- ✅ **Audio lifecycle**: `init()` is single-flight (shared promise; a click
+  racing a conductor push no longer builds two graphs); `start()`/`stop()`
+  are real (bed released, loops gated, master faded, **context suspended** —
+  the Stop button used to only flip its label); `dispose()` tears the graph
+  down (used by `/feather` on unmount); scene `fadeMs` shapes the bed's
+  attack/release (a scene change is a crossfade, `0` is a cut).
+- ✅ **Tempo is real**: `setBpm` sets every loop's `playbackRate` relative to
+  `LOOP_NATIVE_BPM = 120` (the rig default, so untouched presets sound
+  identical) and keeps the phase-alignment maths correct at any rate. The
+  Tempo slider, phone tempo and conductor pushes now audibly stretch the
+  loops (tape-style). Per-sample authored tempo → preset v2.
+- ✅ **`/feather` is audio-reactive** without audio: the console broadcasts
+  `audio.snapshotLevels()` (master + per-loop full/low/mid/high) in its 25 Hz
+  sync state; the display's `AudioEngine.setRemoteLevels()` makes
+  `getLevel/getLoopLevel/getLoopBand/hasLoop` read the mirror (stale after
+  1.5 s, so a dead console doesn't freeze the feather loud). One machine,
+  one set of speakers, no doubled audio.
+- ✅ **Phones survive the night**: console rooms (Device ID + Code) persist in
+  `wb.devices.v1` and are re-claimed on reload (fallback to a fresh room only
+  on `unavailable-id`, written back via `onIdentity`); host handles
+  `disconnected` → `reconnect()`; phone re-dials on close/error with
+  backoff + jitter (cap 60, reset on every open) and reconnects signalling.
+- ✅ **Audio ESP nodes reachable**: `accent` now goes to every online node with
+  role `audio` (the old gate compared the triggering sensor's role).
+- ✅ **Firmware** (`wingbeat-system/firmware/feather_node/feather_node.ino`,
+  needs a reflash): the motion flash no longer punches white pixels through
+  `OFF`.
+- ✅ **Engine**: `setScene` rejects unknown keys (the `getScene` fallback made
+  the old guard unfalsifiable).
+- ✅ **Live sync honesty (#12, partial)**: sample downloads abort after 20 s
+  instead of blocking the remaining loops; the realtime channel reports
+  `subscribing / live / error / closed` and re-reads the live row on every
+  (re)subscribe so a push missed while offline is caught up. A UI indicator
+  for the channel state is still to do.
+
 ---
 
 ## The verdict in one paragraph
@@ -108,18 +169,18 @@ the controls and the health checks that sim mode has, and almost every failure
 
 | # | Missing link | Where | Consequence at the venue |
 |---|---|---|---|
-| 1 | **`/feather2` never connects its LED link.** Only page that calls `ledService.push()`, never calls `connect()`; `autoConnect` config exists but is read by nothing. | `led/ledService.ts:164`, `:26/37`, `feather2/Feather2.tsx:965` | **No music-driven LED frame has ever reached hardware.** Console's sent/dropped counters are a different singleton and look healthy. |
+| 1 | ~~**`/feather2` never connects its LED link.**~~ **FIXED** — `push()` honours Auto-connect (2026-08-16); both pipelines now arbitrated per node, with `src` tags on the wire (2026-08-22). | `led/ledService.ts`, `transports/MqttTransport.ts` | Was: no music-driven LED frame had ever reached hardware. |
 | 2 | **Default LED mode publishes near-black.** `hsv()` returns 0..1 but the `elements`/`sensor` branches feed it into a 0..255 pipeline (`to255(r/255)`). | `led/LedRouter.ts:133-142,155` | Even once #1 is fixed, strips glow dim grey regardless of the music. |
 | 3 | **`patternsOn = false` by default** — `melody`/`perc`/`accent` never fire until someone finds the toggle in Settings. | `engine/WingbeatEngine.ts:253` | Operator loads trigger samples, hears nothing; projection pulse animation stays still. |
-| 4 | **BPM controls drive nothing.** Five UIs write `Tone.Transport.bpm`, but loops are plain `Player`s that never read it; phone tempo gets snapped back by `onLayersChange`. | `engine/AudioEngine.ts:329-339`, `App.tsx:230/694` | "Set the tempo" is a no-op that reads as broken hardware. |
+| 4 | ~~**BPM controls drive nothing.**~~ **FIXED 2026-08-22** — loops follow `setBpm` via playbackRate relative to `LOOP_NATIVE_BPM` (120). | `engine/AudioEngine.ts` | Was: "set the tempo" was a no-op. |
 | 5 | **Hardware mode hides the show controls.** Whole Inputs rail (routing, mic, camera, pairing, Wind×) gated `mode === 'sim'`; keyboard handler bails on non-sim. | `App.tsx:951`, `:698-699` | The mode used at the actual show is the one with the controls removed. |
 | 6 | **Dead ESP nodes look alive.** `engine.tickStaleness()` is called only by SimTransport; `LedLink.lastSeen` recorded but never read. | `transports/MqttTransport.ts` (absent), `SimTransport.ts:55`, `led/LedLink.ts:161` | A browned-out node keeps its green dot; strip freezes mid-colour, nobody is told. |
-| 7 | **No true blackout.** `allOff()` un-latches itself next frame (`router.resync()`); LED config/blackout edited on `/conductor` never reaches the `/feather2` instance (separate page singletons); firmware motion-flash writes white pixels *after* the OFF case. | `led/ledService.ts:184-188`, `feather_node.ino:273-278` | The emergency "all off" flashes black for ~16 ms and resumes; touched feathers strobe white through blackout. |
-| 8 | **Audio nodes can never receive a command.** Role gate compares against the *triggering sensor's* id, so the `cmd/audio` path is unreachable; firmware's `silence` verb exists nowhere in TS. | `transports/MqttTransport.ts:88-99`, `engine/WingbeatEngine.ts:207` | Audio ESPs loop `/bed.mp3` from boot forever, uncontrollable from the console. |
+| 7 | ~~**No true blackout.**~~ **FIXED** — `allOff()` latches (08-16); blackout is honoured by the engine pipeline and sent to every engine node (08-22); firmware motion flash guarded behind `mode != OFF` (08-22, reflash needed). | `led/ledService.ts`, `transports/MqttTransport.ts`, `feather_node.ino` | Was: "all off" lasted one frame; touched feathers strobed white through blackout. |
+| 8 | ~~**Audio nodes can never receive a command.**~~ **FIXED 2026-08-22** — `accent` is published to every online `audio`-role node. `silence` verb still only via `global/cmd/all` (firmware). | `transports/MqttTransport.ts` | Was: the `cmd/audio` path was unreachable. |
 | 9 | **Opening the Controllers panel erases the routing matrix.** Auto-route effect overwrites slots 1–5 with a hardcoded layout and *persists* it; re-fires on every peer update. | `App.tsx:642-690` | An afternoon of patching destroyed by opening a panel to read a pairing code. |
-| 10 | **Console reload orphans every phone.** Device IDs/codes are re-minted randomly per mount, never persisted; PeerJS has no `disconnected` handling, no re-dial, 4 lifetime attempts. | `net/link.ts:99-100,150-175,218` | One refresh = re-display 5 QR codes and re-pair every phone mid-show. |
-| 11 | **`/feather` projection has zero audio reactivity.** Display window creates an AudioEngine but never `attach()`/`init()`, so `audioReady` never fires, loops park forever, `getLevel()` reads 0. | `sim/FeatherView.tsx:23,31` | The actual second-screen projection — the thing the audience sees — doesn't react to sound. |
-| 12 | **"Pushed live ✓" can be a lie.** Realtime subscribe has no status callback, `getLive` failure looks like "nothing pushed", failed sample downloads are `console.warn`, one hung fetch (no timeout/abort) blocks remaining loops. | `net/cloud.ts:156-166,140-144`, `net/liveSync.ts:25-38,120` | Conductor sees success; some devices never got the push, some sensors stay silent, no UI anywhere says so. |
+| 10 | ~~**Console reload orphans every phone.**~~ **FIXED 2026-08-22** — rooms persist (`wb.devices.v1`), host reconnects signalling, phones re-dial with backoff + jitter. | `sim/App.tsx`, `net/link.ts` | Was: one refresh = re-pair five phones mid-show. |
+| 11 | ~~**`/feather` projection has zero audio reactivity.**~~ **FIXED 2026-08-22** — the console mirrors live levels over the sync channel; the display's AudioEngine reads them. | `sim/FeatherView.tsx`, `engine/AudioEngine.ts`, `sim/sync.ts` | Was: the audience-facing projection didn't react to sound. |
+| 12 | **"Pushed live ✓" can be a lie.** PARTLY FIXED 2026-08-22 — downloads time out (20 s), realtime channel reports its state + re-reads on resubscribe. Still missing: a visible channel-state indicator and per-device ack. | `net/cloud.ts`, `net/liveSync.ts` | Conductor can still see success while a device silently never subscribed — but the device now logs it and catches up on reconnect. |
 | 13 | ~~**Anyone can take over the installation.**~~ **FIXED 2026-08-22** — writes go through secret-gated SECURITY DEFINER RPCs; public role is read-only (migrations `wingbeat_secret_gated_writes` + `wingbeat_lockdown_public_writes`). Verified live. | `net/cloud.ts`, `supabase/` | Was: any visitor to wingbeat.art could push their config to every device in the venue. Now: needs the conductor secret. |
 | 14 | **The `/cam` phone-camera feature is entirely dead.** Relay is a Vite-dev-only plugin (404s on Vercel), nothing consumes it (no `'net'` source in `inputs.ts`), and its only UI (`PhonePanel`) is orphaned. | `vite.config.ts:11-40`, `sim/camNet.ts`, `sim/PhonePanel.tsx` | Docs promise a feature that has never been wired; stage time burned debugging it. |
 

@@ -16,7 +16,13 @@
 import type { LedCommand, NodeId } from '../engine/types.ts';
 import { LedRouter, DEFAULT_RATE_HZ } from './LedRouter.ts';
 import { LedLink, type DiscoveredNode, type LinkStatus } from './LedLink.ts';
-import { DEFAULT_FIXTURE, type LedFixture, type LedInputs } from './types.ts';
+import { DEFAULT_FIXTURE, type LedArbiter, type LedFixture, type LedInputs, type LedWire } from './types.ts';
+
+/** A router stream counts as live for this long after its last packet —
+ *  comfortably more than the router's 2 s heartbeat, so a held colour keeps
+ *  ownership, and short enough that a closed /feather2 tab hands the node
+ *  back to the engine before anyone walks over to check the strip. */
+export const ROUTER_LIVE_MS = 3500;
 
 const FIXTURES_KEY = 'wb.led.fixtures';
 const CONFIG_KEY = 'wb.led.config';
@@ -79,7 +85,7 @@ function loadFixtures(): LedFixture[] {
   }
 }
 
-class LedService {
+class LedService implements LedArbiter {
   readonly router = new LedRouter();
   readonly link = new LedLink();
 
@@ -91,13 +97,19 @@ class LedService {
   private traceCbs = new Set<() => void>();
   private changeCbs = new Set<() => void>();
   private identifyUntil = new Map<NodeId, number>();
+  /** last time a ROUTER-tagged packet was seen on the wire, per node */
+  private routerSeen = new Map<NodeId, number>();
 
   constructor() {
     this.router.setRate(this.config.rateHz);
     this.router.setFixtures(this.fixtures);
     this.link.onNodes((nodes) => this.adoptDiscovered(nodes));
     // the monitor reports what is genuinely on the wire, not what we meant
-    this.link.onLed((id, cmd) => this.pushTrace({ id, cmd, reason: 'wire', at: performance.now() }));
+    this.link.onLed((id, cmd) => {
+      this.noteWire(id, cmd);
+      this.pushTrace({ id, cmd, reason: `wire:${cmd.src ?? '?'}`, at: performance.now() });
+    });
+    if (typeof window === 'undefined') return; // plain-Node import (tests)
 
     // Each route is its own page load, so /conductor's panel and /feather2's
     // streamer are SEPARATE instances of this singleton. `storage` fires in
@@ -186,13 +198,57 @@ class LedService {
     this.link.disconnect();
   }
 
+  // ---- arbitration between the two pipelines --------------------------------
+  //
+  // Two things publish to wingbeat/node/<id>/cmd/led: the ENGINE (event-driven
+  // shimmer / wind / pulse through MqttTransport — how the installation has
+  // always behaved) and the ROUTER (a solid-colour stream from /feather2's
+  // music or the console's sensors). Without a rule they interleave and the
+  // strip flickers between two intentions. The rule, per node:
+  //
+  //   1. blackout           → only `off` goes out, from anyone
+  //   2. identify in flight → the white flash wins
+  //   3. fixture source 'engine', or no fixture → the engine drives
+  //   4. a router stream is LIVE (a router packet in the last ROUTER_LIVE_MS)
+  //                         → the router drives, the engine stays silent
+  //   5. otherwise          → the engine drives (a patched fixture with nobody
+  //                           streaming for it must not go dark)
+  //
+  // Liveness is measured on the wire, so it works across page loads: the
+  // console (engine) and /feather2 (router) are different tabs with different
+  // MQTT clients, and the only thing they both see is the broker.
+
+  get blackout(): boolean {
+    return this.config.blackout;
+  }
+
+  noteWire(id: NodeId, cmd: LedWire): void {
+    if (cmd.src === 'router' || cmd.src === 'identify') this.routerSeen.set(id, performance.now());
+  }
+
+  /** True while a router stream has spoken for this node recently. */
+  routerLive(id: NodeId, now = performance.now()): boolean {
+    const t = this.routerSeen.get(id);
+    return t !== undefined && now - t < ROUTER_LIVE_MS;
+  }
+
+  engineMayDrive(id: NodeId): boolean {
+    if (this.config.blackout) return false;
+    const now = performance.now();
+    const until = this.identifyUntil.get(id);
+    if (until !== undefined && now < until) return false;
+    const fx = this.fixtures.find((f) => f.id === id);
+    if (!fx || fx.source === 'engine') return true;
+    return !this.routerLive(id, now);
+  }
+
   /**
    * Flash one node white for a moment so an operator can tell which physical
    * strip is which. Bypasses the router entirely — identifying a fixture must
    * work even when the patch is muted, blacked out or misconfigured.
    */
   identify(id: NodeId, ms = 1200): void {
-    this.link.publishLed(id, { mode: 'solid', r: 255, g: 255, b: 255, intensity: 1 });
+    this.link.publishLed(id, { mode: 'solid', r: 255, g: 255, b: 255, intensity: 1 }, 'identify');
     this.identifyUntil.set(id, performance.now() + ms);
     this.pushTrace({ id, cmd: { mode: 'solid', r: 255, g: 255, b: 255, intensity: 1 }, reason: 'identify', at: performance.now() });
   }

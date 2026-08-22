@@ -17,6 +17,7 @@
 
 import mqtt, { type MqttClient } from 'mqtt';
 import type { LedCommand, NodeId, NodeRole } from '../engine/types.ts';
+import type { LedSource, LedWire } from './types.ts';
 
 export type LinkStatus = 'idle' | 'connecting' | 'connected' | 'error' | 'closed';
 
@@ -42,7 +43,7 @@ export class LedLink {
   private _status: LinkStatus = 'idle';
   private statusCbs = new Set<(s: LinkStatus) => void>();
   private nodeCbs = new Set<(n: Map<NodeId, DiscoveredNode>) => void>();
-  private ledCbs = new Set<(id: NodeId, cmd: LedCommand) => void>();
+  private ledCbs = new Set<(id: NodeId, cmd: LedWire) => void>();
   private nodes = new Map<NodeId, DiscoveredNode>();
   private _sent = 0;
   private _dropped = 0;
@@ -76,7 +77,7 @@ export class LedLink {
    * shows the truth instead — including another operator's traffic, and
    * including our own echoed back, which proves the round trip completed.
    */
-  onLed(cb: (id: NodeId, cmd: LedCommand) => void): () => void {
+  onLed(cb: (id: NodeId, cmd: LedWire) => void): () => void {
     this.ledCbs.add(cb);
     return () => this.ledCbs.delete(cb);
   }
@@ -137,7 +138,7 @@ export class LedLink {
     if (parts[0] !== 'wingbeat') return;
     if (parts.length === 5 && parts[3] === 'cmd' && parts[4] === 'led') {
       try {
-        const cmd = JSON.parse(new TextDecoder().decode(msg)) as LedCommand;
+        const cmd = JSON.parse(new TextDecoder().decode(msg)) as LedWire;
         for (const cb of this.ledCbs) cb(parts[2], cmd);
       } catch { /* a partial payload is not worth reporting */ }
       return;
@@ -163,13 +164,16 @@ export class LedLink {
     this.emitNodes();
   }
 
-  /** Fire-and-forget an LED command. Returns false when the link is down. */
-  publishLed(id: NodeId, cmd: LedCommand): boolean {
+  /** Fire-and-forget an LED command, tagged with who sent it so the engine
+   *  pipeline (and any other client) can tell a router stream from an event.
+   *  Returns false when the link is down. */
+  publishLed(id: NodeId, cmd: LedCommand, src: LedSource = 'router'): boolean {
     if (!this.client?.connected) {
       this._dropped++;
       return false;
     }
-    this.client.publish(`wingbeat/node/${id}/cmd/led`, JSON.stringify(cmd), {
+    const wire: LedWire = { ...cmd, src };
+    this.client.publish(`wingbeat/node/${id}/cmd/led`, JSON.stringify(wire), {
       qos: 0,
       retain: false,
     });

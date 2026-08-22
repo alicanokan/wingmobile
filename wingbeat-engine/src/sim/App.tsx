@@ -12,7 +12,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './ui.css';
 import { WingbeatEngine } from '../engine/WingbeatEngine.ts';
 import { AudioEngine } from '../engine/AudioEngine.ts';
-import { SCENES } from '../engine/scenes.ts';
+import { SCENES, getScene } from '../engine/scenes.ts';
+import { ledService } from '../led/ledService.ts';
 import { SimTransport } from '../transports/SimTransport.ts';
 import { MqttTransport } from '../transports/MqttTransport.ts';
 import type { Transport, TransportStatus } from '../transports/Transport.ts';
@@ -59,6 +60,21 @@ type Mode = 'sim' | 'mqtt';
 // with the venue's wind calibration gone. Same versioned+validated pattern as
 // inputs.ts (`wb.routing.v2`).
 const CONSOLE_KEY = 'wb.console.v1';
+const DEVICE_ROOMS_KEY = 'wb.devices.v1';
+
+function loadDeviceRooms(): Array<{ deviceId: string; code: string } | null> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DEVICE_ROOMS_KEY) ?? '[]');
+    if (!Array.isArray(raw)) return [];
+    return raw.map((r) =>
+      r && typeof r.deviceId === 'string' && typeof r.code === 'string' && /^[A-Z0-9]{3,8}$/.test(r.deviceId) && /^[A-Z0-9]{3,8}$/.test(r.code)
+        ? { deviceId: r.deviceId, code: r.code }
+        : null,
+    );
+  } catch {
+    return [];
+  }
+}
 interface ConsoleState {
   mode: Mode;
   mqttUrl: string;
@@ -233,6 +249,17 @@ export default function App() {
   // 'unavailable-id'); onIdentity reports the room actually claimed.
   const startHosts = useCallback(() => {
     if (linksRef.current.length) return;
+    // Rooms persist across console reloads: a reload used to re-mint every
+    // Device ID + Code, orphaning all paired phones mid-show. Ask for the
+    // saved room first; startHost falls back to a fresh one only if the
+    // PeerJS server still holds the old id (a stale tab), and onIdentity
+    // writes back whatever room was actually claimed.
+    const saved = loadDeviceRooms();
+    const remember = (i: number, deviceId: string, code: string) => {
+      const rooms = loadDeviceRooms();
+      rooms[i] = { deviceId, code };
+      try { localStorage.setItem(DEVICE_ROOMS_KEY, JSON.stringify(rooms)); } catch { /* private mode */ }
+    };
     const feedDevice = (i: number, v: number) => {
       deviceMotion.current[i] = Math.max(0, Math.min(1, v));
       const t = deviceStale.current;
@@ -244,8 +271,13 @@ export default function App() {
     linksRef.current = Array.from({ length: DEVICE_COUNT }, (_, i) => {
       const tag = `D${i + 1}`;
       return startHost({
+        deviceId: saved[i]?.deviceId,
+        code: saved[i]?.code,
         onStatus: (s) => setAt(setDeviceStatus, i, s),
-        onIdentity: (deviceId, code) => setAt<{ deviceId: string; code: string } | null>(setDeviceInfo, i, { deviceId, code }),
+        onIdentity: (deviceId, code) => {
+          remember(i, deviceId, code);
+          setAt<{ deviceId: string; code: string } | null>(setDeviceInfo, i, { deviceId, code });
+        },
         onPeers: (n) => setAt(setDevicePeers, i, n),
         onLog: (msg) => setLinkLog((l) => [...l.slice(-160), `${tag}: ${msg}`]),
         onControl: (c) => {
@@ -418,7 +450,7 @@ export default function App() {
   // (Re)create the transport whenever the mode (or URL) changes.
   useEffect(() => {
     const t: Transport =
-      mode === 'sim' ? new SimTransport({ autoDemo }) : new MqttTransport({ url: mqttUrl });
+      mode === 'sim' ? new SimTransport({ autoDemo }) : new MqttTransport({ url: mqttUrl, led: ledService });
     setTransport(t);
     const offStatus = t.onStatus(setStatus);
     t.connect(engine);
@@ -578,7 +610,10 @@ export default function App() {
     let tick = 0;
     const id = setInterval(() => {
       const nodes = engine.getNodes().map((n) => ({ i: n.id, w: n.wind, p: n.present }));
-      b.send({ kind: 'state', state: { nodes, scene: engine.scene, feather, palette: engine.featherPalette } });
+      b.send({
+        kind: 'state',
+        state: { nodes, scene: engine.scene, feather, palette: engine.featherPalette, audio: audio.ready ? audio.snapshotLevels() : undefined },
+      });
       // rig only when it actually changes (ignore the updatedAt timestamp)
       if (tick++ % 6 === 0) {
         const snap = snapshotPreset();
@@ -593,10 +628,29 @@ export default function App() {
       clearInterval(id);
       b.close();
     };
-  }, [engine, feather]);
+  }, [engine, audio, feather]);
 
   // Watch for a /feather display window so we can pause the console preview.
   useEffect(() => presenceWatch(setFeatherOpen), []);
+
+  // Feed the LED router with what THIS page knows: every node's live
+  // wind/motion/presence and the scene tint. Fixtures patched to "Sensor"
+  // (or "Elements" with hue from scene) now actually light up from the
+  // console — before this nothing ever supplied `sensors`, so a sensor
+  // fixture resolved to black forever. /feather2 supplies the musical
+  // elements from its own page; the router only speaks for fixtures whose
+  // inputs it was given, so the two pages don't fight. 25 Hz is above the
+  // router's publish ceiling, so nothing is lost to the rate gate.
+  useEffect(() => {
+    const id = setInterval(() => {
+      const sensors: Record<string, { wind: number; motion: number; present: boolean; hue: number }> = {};
+      for (const n of engine.getNodes()) {
+        sensors[n.id] = { wind: n.wind, motion: n.motion, present: n.present, hue: (((n.hue % 360) + 360) % 360) / 360 };
+      }
+      ledService.push({ sensors, sceneLed: getScene(engine.scene).led });
+    }, 40);
+    return () => clearInterval(id);
+  }, [engine]);
 
   // Each feather carries its own scene — load it when the feather changes.
   useEffect(() => {
@@ -807,11 +861,13 @@ export default function App() {
 
   const startAudio = async () => {
     if (audioReady) {
+      // genuinely stop: bed released, loops gated, context suspended
+      await audio.stop();
       setAudioReady(false);
       return;
     }
-    await audio.init(masterGain);
-    await audio.resume();
+    audio.setMasterGain(masterGain);
+    await audio.start();
     setAudioReady(true);
   };
 

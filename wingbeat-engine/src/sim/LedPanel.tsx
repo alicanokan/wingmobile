@@ -24,6 +24,7 @@ const SOURCES: Array<{ id: LedSourceKind; label: string; hint: string }> = [
   { id: 'elements', label: 'Elements', hint: 'driven by the musical elements from /feather2' },
   { id: 'sensor', label: 'Sensor', hint: "the node's own wind, motion and presence" },
   { id: 'mirror', label: 'Mirror', hint: 'echo one anatomical part of the on-screen feather' },
+  { id: 'engine', label: 'Engine', hint: 'the engine\'s own shimmer / wind / pulse on melody, presence and scene — the router stays out of it' },
   { id: 'off', label: 'Off', hint: 'dark, but still heartbeated so you know it is alive' },
 ];
 const PARTS: FeatherPart[] = ['rachis', 'vane', 'down', 'markings', 'calamus'];

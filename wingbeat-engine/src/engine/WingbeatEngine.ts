@@ -16,7 +16,7 @@
 // ============================================================================
 
 import { Emitter } from './emitter.ts';
-import { DEFAULT_SCENE, getScene } from './scenes.ts';
+import { DEFAULT_SCENE, SCENES, getScene } from './scenes.ts';
 import { nodeGain, panForNode, nodeSpec } from './spatial.ts';
 import type {
   EngineEvent,
@@ -221,7 +221,12 @@ export class WingbeatEngine {
 
   // ---- Scene control -----------------------------------------------------
   setScene(key: string, fadeMs = 2500) {
-    if (!getScene(key)) return;
+    // getScene() falls back to the default pack, so it can't be used as a
+    // guard: an unknown key must be rejected here, not stored and published.
+    if (!Object.prototype.hasOwnProperty.call(SCENES, key)) {
+      console.warn(`[engine] ignoring unknown scene "${key}"`);
+      return;
+    }
     this.scene = key;
     this.bus.emit({ type: 'scene', key, fadeMs });
     // tint every known feather/sensor to the new pack

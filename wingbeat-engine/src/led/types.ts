@@ -25,7 +25,33 @@ export type LedSourceKind =
   /** the node's own wind/motion/presence, as the installation behaves today */
   | 'sensor'
   /** echo one anatomical part of the on-screen feather */
-  | 'mirror';
+  | 'mirror'
+  /** hand the node to the engine's event-driven modes (shimmer / wind /
+   *  pulse on melody, presence and scene) — the router stays silent for it
+   *  except under blackout */
+  | 'engine';
+
+/** Who put a packet on `cmd/led`. Carried in the payload as `src`; the
+ *  firmware ignores keys it doesn't know, and every other client on the
+ *  broker can now tell the two pipelines apart. */
+export type LedSource = 'engine' | 'router' | 'identify';
+export type LedWire = LedCommand & { src?: LedSource };
+
+/**
+ * The arbitration seam between the two LED pipelines. The engine's transport
+ * asks before every event-driven publish; the router reports what it sees on
+ * the wire so "a router stream is live for this node" is a fact, not a guess.
+ */
+export interface LedArbiter {
+  /** May the engine's event-driven command go out for this node right now? */
+  engineMayDrive(id: NodeId): boolean;
+  /** A packet was observed on cmd/led (from any client, including ourselves). */
+  noteWire(id: NodeId, cmd: LedWire): void;
+  /** Fires when blackout / fixtures / config change. */
+  onChange(cb: () => void): () => void;
+  /** Global blackout — when true nobody publishes anything but `off`. */
+  readonly blackout: boolean;
+}
 
 /** The anatomical parts a fixture can mirror. Matches PART in anatomy.ts. */
 export type FeatherPart = 'calamus' | 'rachis' | 'vane' | 'down' | 'markings';
@@ -77,7 +103,9 @@ export interface LedInputs {
   elements?: Record<string, number>;
   /** 0..1 dominant pitch class, or -1 when nothing is tracked */
   leadNote?: number;
-  /** engine-side node states, keyed by node id */
+  /** engine-side node states, keyed by node id. Leave UNDEFINED when the
+   *  producing page has no engine (e.g. /feather2): the router then skips
+   *  sensor fixtures instead of publishing them black. */
   sensors?: Record<NodeId, SensorSnapshot>;
   /** current colour of each anatomical part of the on-screen feather */
   parts?: Partial<Record<FeatherPart, PartColor>>;

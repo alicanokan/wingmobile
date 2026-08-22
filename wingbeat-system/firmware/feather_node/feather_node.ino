@@ -271,7 +271,8 @@ void renderLeds(float windNow, float motionNow) {
   }
 
   // Tiny motion kick: brief white flash on a random pixel proportional to motion.
-  if (motionNow > 0.4f) {
+  // Never through OFF — a blacked-out strip must stay black when touched.
+  if (motionNow > 0.4f && ledState.mode != LedState::OFF) {
     uint16_t i = random(LED_COUNT);
     uint8_t v = (uint8_t)(min(1.0f, motionNow) * 255);
     strip.setPixelColor(i, strip.Color(v, v, v));

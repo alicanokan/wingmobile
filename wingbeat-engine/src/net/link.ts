@@ -150,7 +150,18 @@ export function startHost(opts: {
     peer.on('open', () => {
       log('host ready — waiting for a phone');
       opts.onIdentity?.(deviceId, code);
-      opts.onStatus('ready');
+      report();
+    });
+    // The signalling server dropped us (sleep, wifi hop). Data channels that
+    // are already open keep working, but no NEW phone can find the room until
+    // we re-register — so do, with a short backoff.
+    peer.on('disconnected', () => {
+      if (destroyed) return;
+      log('signalling lost — re-registering room');
+      setTimeout(() => {
+        if (destroyed) return;
+        try { peer.reconnect(); } catch { claim(); }
+      }, 1000 + Math.random() * 1000);
     });
     peer.on('error', (e) => {
       const type = (e as { type?: string }).type ?? '';
@@ -217,15 +228,44 @@ export function connectHost(
   let attempts = 0;
   let destroyed = false;
   let warnedClosed = false;
+  let redial: ReturnType<typeof setTimeout> | null = null;
+
+  // A phone is pocketed, locked, walks out of range and comes back — many
+  // times in one show. Keep dialing for as long as the page is open, with
+  // backoff + jitter so five phones waking together don't hammer the room in
+  // lock-step. `attempts` resets on every successful open, so the backoff
+  // restarts small after each drop rather than growing for the whole night.
+  const MAX_ATTEMPTS = 60;
+  const scheduleRedial = (why: string) => {
+    if (destroyed || redial) return;
+    if (attempts >= MAX_ATTEMPTS) {
+      log(`giving up after ${attempts} tries — tap connect to retry`);
+      opts.onStatus('error');
+      return;
+    }
+    const base = Math.min(15000, 1200 * Math.pow(1.5, Math.min(attempts, 8)));
+    const wait = Math.round(base + Math.random() * 600);
+    log(`${why} — redial in ${(wait / 1000).toFixed(1)}s`);
+    redial = setTimeout(() => {
+      redial = null;
+      dial();
+    }, wait);
+  };
 
   const dial = () => {
     if (destroyed) return;
+    if (peer.disconnected) {
+      // signalling is down; reconnect() re-fires 'open', which dials again
+      try { peer.reconnect(); } catch { /* destroyed */ }
+      return;
+    }
     attempts++;
     opts.onStatus('connecting');
     log(`dialing ${targetId} (try ${attempts})`);
     const c = peer.connect(targetId, { reliable: true });
     conn = c;
     c.on('open', () => {
+      attempts = 0;
       warnedClosed = false;
       log('DATA CHANNEL OPEN ✓');
       watchIce(c, log);
@@ -234,27 +274,40 @@ export function connectHost(
     });
     c.on('data', () => {}); // console→phone is unused today, but keeps the channel warm
     c.on('close', () => {
-      log('data channel closed');
+      if (conn === c) conn = null;
       opts.onStatus('ready');
+      scheduleRedial('data channel closed');
     });
     c.on('error', (e) => {
       log(`conn error: ${(e as Error).message ?? e}`);
-      if (attempts < 4 && !destroyed) setTimeout(dial, 1200);
-      else opts.onStatus('error');
+      if (conn === c) conn = null;
+      scheduleRedial('connection error');
     });
   };
 
   peer.on('open', (id) => {
     log(`phone ready id=${id}`);
-    dial();
+    if (!conn || !conn.open) dial();
+  });
+  peer.on('disconnected', () => {
+    if (destroyed) return;
+    log('signalling lost — reconnecting');
+    setTimeout(() => {
+      if (destroyed) return;
+      try { peer.reconnect(); } catch { /* destroyed */ }
+    }, 800 + Math.random() * 800);
   });
   peer.on('error', (e) => {
     const type = (e as { type?: string }).type ?? '';
     log(`peer error: ${type} ${(e as Error).message ?? ''}`);
     console.warn('[link] client error', e);
-    // 'peer-unavailable' → the console room isn't up (or wrong code). Retry a few.
-    if (attempts < 4 && !destroyed) setTimeout(dial, 1500);
-    else opts.onStatus('error');
+    // 'peer-unavailable' → the console room isn't up yet (or the codes are
+    // wrong). Keep trying: the console may simply be reloading.
+    if (type === 'peer-unavailable' || type === 'network' || type === 'server-error' || type === 'socket-error' || type === 'socket-closed') {
+      scheduleRedial(type || 'peer error');
+    } else {
+      opts.onStatus('error');
+    }
   });
 
   return {
@@ -267,6 +320,8 @@ export function connectHost(
     },
     destroy() {
       destroyed = true;
+      if (redial) clearTimeout(redial);
+      redial = null;
       conn?.close();
       peer.destroy();
     },

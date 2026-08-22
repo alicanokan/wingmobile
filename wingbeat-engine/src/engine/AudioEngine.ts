@@ -49,8 +49,29 @@ const DEFAULT_GAINS: Record<LayerName, number> = {
 
 const C4 = 261.63;
 
+/** Tempo at which a loop plays at native speed (playbackRate 1). The rig's
+ *  default tempo is 120, so every preset that never touched the Tempo slider
+ *  sounds exactly as before; moving the slider now genuinely stretches the
+ *  loops (tape-style — pitch follows speed). Per-sample authored tempo is a
+ *  later refinement (preset v2); the reference is overridable already. */
+export const LOOP_NATIVE_BPM = 120;
+
+/** Levels mirrored from another window's AudioEngine (the console → a
+ *  /feather display) so a display with no audio context of its own can still
+ *  be audio-reactive. `loops[id]` = [full, low, mid, high], all 0..1. */
+export interface RemoteLevels {
+  level: number;
+  loops: Record<string, [number, number, number, number]>;
+}
+
 export class AudioEngine {
   ready = false;
+  /** true between start() and stop() — the context is running and the bed is held */
+  running = false;
+  private initPromise: Promise<void> | null = null;
+  private remote: RemoteLevels | null = null;
+  private remoteAt = 0;
+  private loopNativeBpm = LOOP_NATIVE_BPM;
 
   private master!: Tone.Gain;
   private reverb!: Tone.Reverb;
@@ -104,9 +125,20 @@ export class AudioEngine {
   reverbWet = 0.35;
   private masterGainValue = 0.7;
 
-  /** Must be called from a user gesture (browser autoplay policy). */
-  async init(masterGain = 0.7): Promise<void> {
-    if (this.ready) return;
+  /** Must be called from a user gesture (browser autoplay policy).
+   *  Single-flight: concurrent callers (a click racing a conductor push that
+   *  loads a loop) share one initialisation instead of building two graphs. */
+  init(masterGain = 0.7): Promise<void> {
+    if (this.ready) return Promise.resolve();
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this.buildGraph(masterGain).catch((err) => {
+      this.initPromise = null; // let a later gesture retry
+      throw err;
+    });
+    return this.initPromise;
+  }
+
+  private async buildGraph(masterGain: number): Promise<void> {
     this.masterGainValue = masterGain;
     await Tone.start();
 
@@ -175,10 +207,85 @@ export class AudioEngine {
     });
 
     this.ready = true;
+    this.running = true;
+    for (const [, l] of this.loops) l.player.playbackRate = this.loopRate();
     if (this.engine) {
       this.startBed(this.engine.scene);
       this.engine.emitAudioReady();
     }
+  }
+
+  // ---- Lifecycle ---------------------------------------------------------
+
+  /** init (if needed) + resume the context + bring the bed back. The console's
+   *  "Start audio" button. */
+  async start(): Promise<void> {
+    await this.init(this.masterGainValue);
+    await this.resume();
+    if (!this.running) {
+      this.running = true;
+      this.master.gain.rampTo(this.masterGainValue, 0.3);
+      if (this.engine) this.startBed(this.engine.scene);
+      for (const [, l] of this.loops) l.gain.gain.rampTo(l.target, 0.3);
+    }
+  }
+
+  /** Actually stop the sound: release the bed, silence the wind and every
+   *  loop gate, fade the master, then suspend the context so the machine
+   *  goes quiet (no CPU, no hiss). Graph + samples are kept; start() resumes.
+   *  Before this existed the "Stop" button only flipped its own label. */
+  async stop(): Promise<void> {
+    if (!this.ready || !this.running) return;
+    this.running = false;
+    try { this.bed.releaseAll(); } catch { /* nothing held */ }
+    this.noiseGain.gain.rampTo(0, 0.2);
+    for (const [, l] of this.loops) l.gain.gain.rampTo(0, 0.25);
+    this.master.gain.rampTo(0, 0.3);
+    await new Promise((r) => setTimeout(r, 350));
+    if (this.running) return; // start() won the race
+    try {
+      const ctx = Tone.getContext().rawContext as AudioContext;
+      if (ctx.state === 'running') await ctx.suspend();
+    } catch { /* context already closed */ }
+  }
+
+  /** Tear the whole graph down. For a page that is going away (a /feather
+   *  display unmounting, a React StrictMode double-mount). Not resumable —
+   *  construct a new AudioEngine afterwards. */
+  dispose(): void {
+    this.detach();
+    for (const id of [...this.loops.keys()]) this.clearLoop(id);
+    (['melody', 'perc', 'accent'] as SampleLayer[]).forEach((l) => this.clearSample(l));
+    this.layerPlayers.forEach((p) => p.dispose());
+    this.layerPlayers.clear();
+    if (this.ready) {
+      const nodes: Array<{ dispose(): unknown } | undefined> = [
+        this.bedLfo, this.bed, this.noise, this.noiseFilter, this.noiseGain, this.pluck, this.pluckPan,
+        this.perc, this.percPan, this.bell, this.bellPan, this.layerSynth, this.layerPan,
+        this.buses?.bed, this.buses?.wind, this.buses?.melody, this.buses?.perc, this.buses?.accent,
+        this.meter, this.master, this.reverb,
+      ];
+      for (const n of nodes) { try { n?.dispose(); } catch { /* already disposed */ } }
+    }
+    this.ready = false;
+    this.running = false;
+    this.initPromise = null;
+  }
+
+  // ---- Mirrored levels (display windows) --------------------------------
+
+  /** Feed levels measured elsewhere. A window that never unlocks audio
+   *  (the /feather projection) reads these from getLevel()/getLoopLevel()
+   *  instead of its own silent meters. Ignored once this engine is ready. */
+  setRemoteLevels(r: RemoteLevels | null): void {
+    this.remote = r;
+    this.remoteAt = performance.now();
+  }
+  private remoteFresh(): RemoteLevels | null {
+    if (this.ready || !this.remote) return null;
+    // a console that stopped broadcasting shouldn't leave the display frozen
+    // on its last loud frame
+    return performance.now() - this.remoteAt < 1500 ? this.remote : null;
   }
 
   private busLevel(name: LayerName): number {
@@ -215,6 +322,8 @@ export class AudioEngine {
 
   /** Live master level 0..1 — the projection reads this for audio-reactive motion. */
   getLevel(): number {
+    const r = this.remoteFresh();
+    if (r) return Math.min(1, Math.max(0, r.level));
     if (!this.meter) return 0;
     const v = this.meter.getValue();
     return typeof v === 'number' ? Math.min(1, Math.max(0, v)) : 0;
@@ -333,9 +442,29 @@ export class AudioEngine {
     t.start();
     this.transportOn = true;
   }
+  /** Set the loop tempo. Drives Tone's transport AND every loop's
+   *  playbackRate relative to the native tempo (see LOOP_NATIVE_BPM), so the
+   *  Tempo slider, a phone's tempo control and a conductor push all audibly
+   *  change speed — before this, the loops were plain Players that never
+   *  read the transport, and "tempo" was a number that did nothing. */
   setBpm(bpm: number) {
+    if (!Number.isFinite(bpm) || bpm <= 0) return;
     this.bpm = bpm;
     if (this.transportOn) Tone.getTransport().bpm.rampTo(bpm, 0.1);
+    const rate = this.loopRate();
+    for (const [, l] of this.loops) l.player.playbackRate = rate;
+  }
+  /** Tempo at which loops play at rate 1. Override when the material's
+   *  authored tempo is known (e.g. a scene pack's stems). */
+  setLoopNativeBpm(bpm: number) {
+    if (!Number.isFinite(bpm) || bpm <= 0) return;
+    this.loopNativeBpm = bpm;
+    this.setBpm(this.bpm);
+  }
+  /** Current loop playbackRate — 1 at the native tempo. Clamped so a wild
+   *  value from a phone can't turn a stem into a click or a drone. */
+  loopRate(): number {
+    return Math.max(0.25, Math.min(4, this.bpm / this.loopNativeBpm));
   }
 
   async loadLoopSample(sensorId: string, file: File): Promise<void> {
@@ -364,6 +493,7 @@ export class AudioEngine {
     const fft = new Tone.FFT({ size: 256, smoothing: 0.8 }); // EQ bands for routing + the visual EQ editor
     const player = new Tone.Player(ab);
     player.loop = true;
+    player.playbackRate = this.loopRate();
     player.connect(gain);                             // → fader → master
     player.connect(meter);                            // RAW loop level → always analysed,
     player.connect(fft);                              // RAW spectrum → low/mid/high bands,
@@ -381,8 +511,11 @@ export class AudioEngine {
     //
     // Alignment holds after that: looping buffer sources all run off the one
     // audio hardware clock, so they don't drift relative to each other.
-    const period = ab.duration;
-    const offset = period > 0 ? Tone.getTransport().seconds % period : 0;
+    // At playbackRate r the loop's wall-clock period is duration / r, and the
+    // buffer offset that corresponds to a wall-clock phase is phase * r.
+    const rate = this.loopRate();
+    const period = ab.duration / rate;
+    const offset = period > 0 ? (Tone.getTransport().seconds % period) * rate : 0;
     try {
       player.start(undefined, offset);
     } catch {
@@ -402,7 +535,9 @@ export class AudioEngine {
     this.loops.delete(sensorId);
   }
   hasLoop(sensorId: string): boolean {
-    return this.loops.has(sensorId);
+    if (this.loops.has(sensorId)) return true;
+    const r = this.remoteFresh();
+    return !!r && sensorId in r.loops;
   }
 
   /** Raise/lower a sensor's loop volume (0..1.4). Driven by sensor activation. */
@@ -451,8 +586,25 @@ export class AudioEngine {
     if (l) l.fader.gain.rampTo(mute ? 0 : strip.gain, 0.06);
   }
 
+  /** Snapshot of every loop's levels for mirroring to a display window:
+   *  [full, low, mid, high] per sensor plus the master level. */
+  snapshotLevels(): RemoteLevels {
+    const loops: RemoteLevels['loops'] = {};
+    for (const id of this.loops.keys()) {
+      loops[id] = [
+        this.getLoopLevel(id),
+        this.getLoopBand(id, 'low'),
+        this.getLoopBand(id, 'mid'),
+        this.getLoopBand(id, 'high'),
+      ];
+    }
+    return { level: this.getLevel(), loops };
+  }
+
   /** Live level of a sensor's loop 0..1 — drives that layer's audio-reactivity. */
   getLoopLevel(sensorId: string): number {
+    const r = this.remoteFresh();
+    if (r) return r.loops[sensorId]?.[0] ?? 0;
     const l = this.loops.get(sensorId);
     if (!l) return 0;
     const raw = l.meter.getValue();
@@ -462,6 +614,8 @@ export class AudioEngine {
   }
   /** Is a sensor's loop currently audible/playing? */
   loopActive(sensorId: string): boolean {
+    const r = this.remoteFresh();
+    if (r) return sensorId in r.loops;
     const l = this.loops.get(sensorId);
     return !!l && l.player.state === 'started';
   }
@@ -481,6 +635,15 @@ export class AudioEngine {
    *  that drives the low/mid/high presets, generalized so a hand-picked EQ
    *  range drives its layer exactly like the visual editor previews it. */
   getLoopBandRange(sensorId: string, minHz: number, maxHz: number): number {
+    const r = this.remoteFresh();
+    if (r) {
+      // a mirror carries the three preset bands, not the spectrum: pick the
+      // band the custom range mostly overlaps
+      const nyq = this.nyquist;
+      const mid = (minHz + maxHz) / 2;
+      const b = mid < nyq / 3 ? 1 : mid < (2 * nyq) / 3 ? 2 : 3;
+      return r.loops[sensorId]?.[b] ?? 0;
+    }
     const l = this.loops.get(sensorId);
     if (!l) return 0;
     const arr = l.fft.getValue() as Float32Array;
@@ -502,6 +665,8 @@ export class AudioEngine {
   /** Level 0..1 of one preset EQ band of a sensor's loop — route this to its layer. */
   getLoopBand(sensorId: string, band: 'full' | 'low' | 'mid' | 'high'): number {
     if (band === 'full') return this.getLoopLevel(sensorId);
+    const r = this.remoteFresh();
+    if (r) return r.loops[sensorId]?.[band === 'low' ? 1 : band === 'mid' ? 2 : 3] ?? 0;
     const nyq = this.nyquist;
     const lo = band === 'low' ? 0 : band === 'mid' ? nyq / 3 : (2 * nyq) / 3;
     const hi = band === 'low' ? nyq / 3 : band === 'mid' ? (2 * nyq) / 3 : nyq;
@@ -527,8 +692,8 @@ export class AudioEngine {
     this.engine = engine;
 
     this.detachers.push(
-      engine.on('scene', ({ key }) => {
-        if (this.ready) this.startBed(key);
+      engine.on('scene', ({ key, fadeMs }) => {
+        if (this.ready && this.running) this.startBed(key, fadeMs);
       }),
     );
     this.detachers.push(
@@ -572,8 +737,14 @@ export class AudioEngine {
     this.engine = null;
   }
 
-  private startBed(sceneKey: string) {
+  /** Swap the drone chord. `fadeMs` (the engine's scene event carries it;
+   *  0 = instant, 2500 = the default crossfade) shapes the release of the old
+   *  chord and the attack of the new one, so a scene change at the desk is
+   *  the slow crossfade the operator asked for, not a cut. */
+  private startBed(sceneKey: string, fadeMs = 2500) {
     const scene = getScene(sceneKey);
+    const sec = Math.max(0.02, Math.min(20, fadeMs / 1000));
+    this.bed.set({ envelope: { attack: sec, release: sec } });
     this.bed.releaseAll();
     this.bed.triggerAttack(scene.bedNotes);
   }

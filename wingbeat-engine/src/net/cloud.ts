@@ -120,10 +120,27 @@ export function sampleUrl(pathOrRef: string | SampleRef): string {
 }
 
 /** Bytes of a sample — IndexedDB cache first, then Storage (and cache it). */
+/** A sample download that hangs (venue wifi, captive portal) must not block
+ *  the remaining loops forever — liveSync installs loops one after another. */
+const FETCH_TIMEOUT_MS = 20000;
+
 export async function fetchSampleBuffer(ref: SampleRef): Promise<ArrayBuffer> {
   const cached = await cacheGet(ref.id);
   if (cached) return cached;
-  const res = await fetch(sampleUrl(ref));
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(sampleUrl(ref), { signal: ctl.signal });
+  } catch (err) {
+    throw new Error(
+      ctl.signal.aborted
+        ? `Timed out downloading "${ref.name}" after ${FETCH_TIMEOUT_MS / 1000}s`
+        : `Couldn't download "${ref.name}": ${(err as Error).message ?? err}`,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) throw new Error(`Couldn't download "${ref.name}" (${res.status})`);
   const buf = await res.arrayBuffer();
   await cachePut(ref.id, buf);
@@ -207,8 +224,14 @@ export async function pushLive(feather: string, config: ConductorConfig, presetI
   if (error) throw writeError(`Couldn't push live`, error);
 }
 
-/** Subscribe to live-state changes. Returns an unsubscribe function. */
-export function onLiveChange(cb: (live: LiveState) => void): () => void {
+export type LiveSubStatus = 'subscribing' | 'live' | 'error' | 'closed';
+
+/** Subscribe to live-state changes. Returns an unsubscribe function.
+ *  `onStatus` reports whether the realtime channel is actually delivering —
+ *  a device that silently never subscribed used to look identical to one
+ *  that simply hadn't been pushed to yet. */
+export function onLiveChange(cb: (live: LiveState) => void, onStatus?: (s: LiveSubStatus) => void): () => void {
+  onStatus?.('subscribing');
   const channel = supabase
     .channel('wingbeat-live')
     .on(
@@ -218,7 +241,14 @@ export function onLiveChange(cb: (live: LiveState) => void): () => void {
         if (payload.new && typeof payload.new === 'object') cb(payload.new as LiveState);
       },
     )
-    .subscribe();
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') onStatus?.('live');
+      else if (status === 'CLOSED') onStatus?.('closed');
+      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('[wingbeat] live subscription', status);
+        onStatus?.('error');
+      }
+    });
   return () => {
     supabase.removeChannel(channel);
   };

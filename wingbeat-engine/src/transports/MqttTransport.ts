@@ -9,8 +9,11 @@
 //    INBOUND   wingbeat/node/<id>/sensor/{wind,motion,presence}  → engine.ingest*
 //              wingbeat/node/<id>/status                         → engine.ingestStatus
 //
-//    OUTBOUND  engine 'led'   event → wingbeat/node/<id>/cmd/led
+//    OUTBOUND  engine 'led'   event → wingbeat/node/<id>/cmd/led  (tagged src:engine,
+//                                     arbitrated against the LED router — see
+//                                     LedArbiter in led/types.ts)
 //              engine 'scene' event → wingbeat/global/scene  (retained)
+//              engine 'accent' event → wingbeat/node/<audio id>/cmd/audio
 //
 //  Flip the transport from SimTransport to this, point it at the broker, and
 //  the simulation you tuned IS the installation.
@@ -20,14 +23,27 @@ import mqtt, { type MqttClient } from 'mqtt';
 import { BaseTransport } from './Transport.ts';
 import { getScene } from '../engine/scenes.ts';
 import type { WingbeatEngine } from '../engine/WingbeatEngine.ts';
-import type { NodeRole } from '../engine/types.ts';
+import type { LedCommand, NodeId, NodeRole } from '../engine/types.ts';
+import type { LedArbiter, LedWire } from '../led/types.ts';
 
 export interface MqttOptions {
   /** e.g. ws://10.0.0.4:9001 — the Mosquitto WebSocket listener. */
   url: string;
   username?: string;
   password?: string;
+  /**
+   * The LED arbiter (normally `ledService`). When given, the engine's
+   * event-driven LED commands are published only for nodes the router isn't
+   * streaming to, blackout is honoured, and the engine re-asserts its state
+   * the moment a node is handed back. Without it this transport publishes
+   * every `led` event unconditionally — the pre-arbitration behaviour.
+   */
+  led?: LedArbiter;
 }
+
+/** How often the transport checks whether a router-owned node has been
+ *  handed back (stream stopped) and needs the engine's colour re-sent. */
+const HANDBACK_SWEEP_MS = 1000;
 
 export class MqttTransport extends BaseTransport {
   readonly kind = 'mqtt' as const;
@@ -36,6 +52,10 @@ export class MqttTransport extends BaseTransport {
   private client: MqttClient | null = null;
   private opts: MqttOptions;
   private staleTimer: ReturnType<typeof setInterval> | null = null;
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  /** per node: did the engine have the floor at the last sweep? */
+  private hadFloor = new Map<NodeId, boolean>();
+  private wasBlackout = false;
 
   constructor(opts: MqttOptions) {
     super();
@@ -60,6 +80,9 @@ export class MqttTransport extends BaseTransport {
       this.setStatus('connected');
       client.subscribe('wingbeat/node/+/sensor/+', { qos: 0 });
       client.subscribe('wingbeat/node/+/status', { qos: 1 });
+      // watch the LED topic too: that's how we know a router stream is live
+      // for a node (see LedArbiter) even when this page has no LedLink open
+      if (this.opts.led) client.subscribe('wingbeat/node/+/cmd/led', { qos: 0 });
       // Announce the engine's current scene so freshly-booted nodes sync up.
       this.publishScene(engine.scene);
     });
@@ -78,36 +101,90 @@ export class MqttTransport extends BaseTransport {
     // ---- Outbound: engine commands → MQTT ----
     this.detachers.push(
       engine.on('led', ({ id, cmd }) => {
-        if (!client.connected) return;
-        client.publish(`wingbeat/node/${id}/cmd/led`, JSON.stringify(cmd), {
-          qos: 1,
-          retain: false,
-        });
+        const led = this.opts.led;
+        if (led && !led.engineMayDrive(id)) return; // router owns it right now
+        this.publishLed(id, cmd);
       }),
     );
+
+    // ---- Arbitration housekeeping ----
+    const led = this.opts.led;
+    if (led) {
+      this.wasBlackout = led.blackout;
+      // blackout flips: going dark → every engine node gets `off` (the
+      // router only knows its fixtures); coming back → re-assert the engine's
+      // last colour on every node it may drive
+      this.detachers.push(
+        led.onChange(() => {
+          const now = led.blackout;
+          if (now === this.wasBlackout) return;
+          this.wasBlackout = now;
+          if (now) {
+            for (const n of engine.getNodes()) this.publishLed(n.id, { mode: 'off', r: 0, g: 0, b: 0, intensity: 0 });
+          } else {
+            this.reassert(engine, led);
+          }
+        }),
+      );
+      // a router stream that stops (tab closed, link dropped) hands the node
+      // back; nothing event-driven may happen for minutes, so re-send
+      // proactively rather than leave the strip frozen on the router's last
+      // colour
+      this.sweepTimer = setInterval(() => this.reassert(engine, led, true), HANDBACK_SWEEP_MS);
+    }
 
     this.detachers.push(
       engine.on('scene', ({ key }) => this.publishScene(key)),
     );
 
-    // (Optional) drive I2S audio nodes: an 'accent' could fire a local sample.
+    // Drive the I2S audio nodes: an 'accent' (presence onset) fires their
+    // local accent sample. Accents are raised by SENSOR nodes, so the command
+    // goes to every node whose role is 'audio' — the old gate compared the
+    // triggering sensor's own role, which is never 'audio', so no audio node
+    // ever received a command.
     this.detachers.push(
-      engine.on('accent', ({ id }) => {
+      engine.on('accent', () => {
         if (!client.connected) return;
-        const node = engine.getNode(id);
-        if (node?.role !== 'audio') return;
-        client.publish(
-          `wingbeat/node/${id}/cmd/audio`,
-          JSON.stringify({ layer: 'accent', gain: 0.8, play: true }),
-          { qos: 1 },
-        );
+        for (const node of engine.getNodes()) {
+          if (node.role !== 'audio' || !node.online) continue;
+          client.publish(
+            `wingbeat/node/${node.id}/cmd/audio`,
+            JSON.stringify({ layer: 'accent', gain: 0.8, play: true }),
+            { qos: 1 },
+          );
+        }
       }),
     );
   }
 
+  private publishLed(id: NodeId, cmd: LedCommand) {
+    if (!this.client?.connected) return;
+    const wire: LedWire = { ...cmd, src: 'engine' };
+    this.client.publish(`wingbeat/node/${id}/cmd/led`, JSON.stringify(wire), {
+      qos: 1,
+      retain: false,
+    });
+  }
+
+  /** Re-send the engine's current LED state for nodes it may drive. With
+   *  `onlyRegained` only nodes whose floor flipped false→true since the last
+   *  call are sent, so the sweep is silent in steady state. */
+  private reassert(engine: WingbeatEngine, led: LedArbiter, onlyRegained = false) {
+    for (const n of engine.getNodes()) {
+      const may = led.engineMayDrive(n.id);
+      const had = this.hadFloor.get(n.id) ?? true;
+      this.hadFloor.set(n.id, may);
+      if (!may) continue;
+      if (onlyRegained && had) continue;
+      this.publishLed(n.id, n.led);
+    }
+  }
+
   disconnect(): void {
     if (this.staleTimer) clearInterval(this.staleTimer);
-    this.staleTimer = null;
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+    this.staleTimer = this.sweepTimer = null;
+    this.hadFloor.clear();
     this.client?.end(true);
     this.client = null;
     super.disconnect();
@@ -125,6 +202,11 @@ export class MqttTransport extends BaseTransport {
     try {
       payload = JSON.parse(msg.toString());
     } catch {
+      return;
+    }
+
+    if (kind === 'cmd' && parts[4] === 'led') {
+      this.opts.led?.noteWire(id, payload as unknown as LedWire);
       return;
     }
 
