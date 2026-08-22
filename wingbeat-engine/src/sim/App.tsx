@@ -54,20 +54,44 @@ import { DEVICE_TIER } from './rig.ts';
 
 type Mode = 'sim' | 'mqtt';
 
+// Operator-critical console state survives a reload. An accidental refresh at
+// a show must NOT silently drop the console back to simulation at 70% volume
+// with the venue's wind calibration gone. Same versioned+validated pattern as
+// inputs.ts (`wb.routing.v2`).
+const CONSOLE_KEY = 'wb.console.v1';
+interface ConsoleState {
+  mode: Mode;
+  mqttUrl: string;
+  masterGain: number;
+  windSens: number;
+}
+function loadConsoleState(): ConsoleState {
+  const st: ConsoleState = { mode: 'sim', mqttUrl: 'ws://localhost:9001', masterGain: 0.7, windSens: 1.0 };
+  try {
+    const raw = JSON.parse(localStorage.getItem(CONSOLE_KEY) ?? '{}') as Partial<ConsoleState>;
+    if (raw.mode === 'sim' || raw.mode === 'mqtt') st.mode = raw.mode;
+    if (typeof raw.mqttUrl === 'string' && raw.mqttUrl) st.mqttUrl = raw.mqttUrl;
+    if (Number.isFinite(raw.masterGain)) st.masterGain = Math.max(0, Math.min(1, raw.masterGain as number));
+    if (Number.isFinite(raw.windSens)) st.windSens = Math.max(0.2, Math.min(4, raw.windSens as number));
+  } catch { /* storage unavailable or corrupt → defaults */ }
+  return st;
+}
+const savedConsole = loadConsoleState();
+
 export default function App() {
   // Engine + audio are created once and outlive transport swaps.
   const engine = useMemo(() => new WingbeatEngine(), []);
   const audio = useMemo(() => new AudioEngine(), []);
 
-  const [mode, setMode] = useState<Mode>('sim');
-  const [mqttUrl, setMqttUrl] = useState('ws://localhost:9001');
+  const [mode, setMode] = useState<Mode>(savedConsole.mode);
+  const [mqttUrl, setMqttUrl] = useState(savedConsole.mqttUrl);
   const [transport, setTransport] = useState<Transport | null>(null);
   const [status, setStatus] = useState<TransportStatus>('idle');
 
   const [audioReady, setAudioReady] = useState(false);
   const [autoDemo, setAutoDemo] = useState(false);
-  const [masterGain, setMasterGain] = useState(0.7);
-  const [windSens, setWindSens] = useState(1.0);
+  const [masterGain, setMasterGain] = useState(savedConsole.masterGain);
+  const [windSens, setWindSens] = useState(savedConsole.windSens);
   const [micOn, setMicOn] = useState(false);
   const [camOn, setCamOn] = useState(false);
   const [fullscreenProjection, setFullscreenProjection] = useState(false);
@@ -92,6 +116,13 @@ export default function App() {
   const [mobileFirstTime, setMobileFirstTime] = useState(() => !localStorage.getItem('wb.mobile.setup'));
   const [swipeCount, setSwipeCount] = useState(0);
   const swipeRef = useRef({ lastX: 0, lastY: 0, direction: null as 'left' | 'right' | null, count: 0, timestamp: 0 });
+
+  // Persist the operator-critical console state (see loadConsoleState above).
+  useEffect(() => {
+    try {
+      localStorage.setItem(CONSOLE_KEY, JSON.stringify({ mode, mqttUrl, masterGain, windSens }));
+    } catch { /* private mode / quota — session stays volatile, don't crash */ }
+  }, [mode, mqttUrl, masterGain, windSens]);
 
   // Up to DEVICE_COUNT independent phone controllers, each its own room (Device
   // ID + Code) and its own routable source dev1..dev5. Live motion per device is
@@ -226,9 +257,18 @@ export default function App() {
             case 'scene':
               engine.setScene(c.key);
               break;
-            case 'bpm':
-              audio.setBpm(c.v);
+            case 'bpm': {
+              // A stale or buggy phone client must not be able to NaN the
+              // transport (which silences every loop). Clamp, and write
+              // through to the rig — audio.setBpm alone gets snapped back
+              // by onLayersChange on the next feather/layer change.
+              const v = Number(c.v);
+              if (!Number.isFinite(v)) break;
+              const bpm = Math.max(40, Math.min(220, Math.round(v)));
+              rig.global.bpm = bpm;
+              audio.setBpm(bpm);
               break;
+            }
             case 'master':
               setMasterGain(Math.max(0, Math.min(1, c.v)));
               break;
@@ -623,27 +663,29 @@ export default function App() {
   useEffect(() => {
     if (entryMode !== 'mobile') return;
     if (!prevDeviceConnectedRef.current && anyDeviceConnected) {
-      // First device just connected — route camera to first 4 slots
+      // First device just connected — route camera to first 4 slots.
+      // (Side effects live OUTSIDE the updater: React state updaters must be
+      // pure, and StrictMode double-invokes them.)
       setRouting((r) => {
         const sources = { ...r.sources };
         for (let i = 0; i < 4; i++) {
           sources[`slot_${i + 1}`] = 'camera';
         }
-        const next = { ...r, sources };
-        saveRouting(next);
-        setCamOn(true);
-        return next;
+        return { ...r, sources };
       });
+      setCamOn(true);
     }
     prevDeviceConnectedRef.current = anyDeviceConnected;
   }, [anyDeviceConnected, entryMode]);
 
-  // Auto-route devices to sensors in fullscreen/control based on device count.
+  // Auto-route devices to sensors in FULLSCREEN autopilot only. This used to
+  // also fire in control mode whenever the Controllers panel was open — which
+  // meant opening the panel just to read a pairing code overwrote (and saved
+  // to disk!) whatever routing the operator had patched. Control mode is the
+  // operator's desk: never touch their matrix there. The autopilot layout is
+  // also deliberately NOT persisted — it's a live arrangement, not the patch.
   useEffect(() => {
-    const inFullscreen = entryMode === 'fullscreen' && fullscreenProjection;
-    const inControl = entryMode === 'control' && showPair;
-
-    if (!inFullscreen && !inControl) return;
+    if (!(entryMode === 'fullscreen' && fullscreenProjection)) return;
 
     const connectedCount = devicePeers.reduce((sum, p) => sum + (p > 0 ? 1 : 0), 0);
 
@@ -682,22 +724,21 @@ export default function App() {
         sources['slot_5'] = 'dev1';
       }
 
-      const next = { ...r, sources };
-      saveRouting(next);
-      if (connectedCount >= 0 && !camOn) setCamOn(true);
-      return next;
+      return { ...r, sources };
     });
-  }, [devicePeers, fullscreenProjection, showPair, entryMode]);
+    setCamOn(true);
+  }, [devicePeers, fullscreenProjection, entryMode]);
 
   // The rig (re)loads per feather inside the Projection; when it does (layer
   // rebuild), push that feather's authored tempo to the loop transport.
   useEffect(() => onLayersChange(() => audio.setBpm(rig.global.bpm)), [audio]);
 
-  // Keyboard (sim): hold Q W E R T to blow on sensors 1–5, F (or Space) to take
-  // the feather in hand.
+  // Keyboard: hold Q W E R T to blow on sensors 1–5 — the operator's primary
+  // manual override, so it must work under ANY transport (the slot keys feed
+  // refs the central router reads; no transport involved). Only F/Space
+  // (feather-in-hand) is sim-specific: on hardware the real prop does that.
   useEffect(() => {
-    if (transport?.kind !== 'sim') return;
-    const sim = transport as SimTransport;
+    const sim = transport?.kind === 'sim' ? (transport as SimTransport) : null;
     let featherOn = false; // 'f' is a toggle so hands are free to trigger sensors
     // Only block shortcuts while typing in a real text field — NOT when a button
     // happens to be focused (clicking the routing matrix leaves a button focused,
@@ -716,6 +757,7 @@ export default function App() {
       if (k === 'f') {
         // TOGGLE the feather in hand → grows the 3D contour in (and stays)
         ev.preventDefault();
+        if (!sim) return;
         featherOn = !featherOn;
         sim.holdWind('feather_01', featherOn ? 1 : 0);
         sim.setPresence('feather_01', featherOn);
@@ -725,6 +767,7 @@ export default function App() {
       if (k === ' ' || k === 'spacebar') {
         // momentary: hold to show the contour while pressed
         ev.preventDefault();
+        if (!sim) return;
         sim.holdWind('feather_01', 1);
         sim.setPresence('feather_01', true);
         return;
@@ -744,7 +787,7 @@ export default function App() {
       const k = ev.key.toLowerCase();
       if (k === 'f') return; // toggle: ignore key release
       if (k === ' ' || k === 'spacebar') {
-        if (!featherOn) {
+        if (sim && !featherOn) {
           sim.releaseWind('feather_01');
           sim.setPresence('feather_01', false);
         }
@@ -946,46 +989,54 @@ export default function App() {
           >
             ⚙ mixer
           </button>
+          <button
+            className={`wb-btn ${engine.patternsOn ? 'active' : ''}`}
+            onClick={() => engine.setPatterns(!engine.patternsOn)}
+            title={engine.patternsOn ? 'Generative pulse on — click for sensors + loops only' : 'Sensors + loops only — click to enable melody/perc/accent triggers'}
+          >
+            ∿ Patterns
+          </button>
         </div>
 
-        {mode === 'sim' && (
-          <>
-            <div className="wb-rail-sec">Inputs</div>
-            <div className="wb-rail-group">
-              <button className={`wb-btn ${showMatrix ? 'active' : ''}`} onClick={() => setShowMatrix((v) => !v)}>
-                ▦ Routing
-              </button>
-              <button className={`wb-btn ${showKeys ? 'active' : ''}`} onClick={() => setShowKeys((v) => !v)}>
-                ⌨ Keys
-              </button>
-              <button className={`wb-btn wb-btn-ctrl ${showPair ? 'active' : ''}`} onClick={() => setShowPair((v) => !v)}>
-                <span className={`wb-dot ${anyDeviceConnected ? 'connected' : ''}`} style={{ marginRight: 6 }} />⧉ Controllers
-                {devicePeers.reduce((a, b) => a + b, 0) > 0 && ` · ${devicePeers.reduce((a, b) => a + b, 0)}`}
-              </button>
-              <button className={`wb-btn ${autoDemo ? 'active' : ''}`} onClick={() => setAutoDemo((v) => !v)}>
-                Auto-demo
-              </button>
-              <button className={`wb-btn ${micOn ? 'active' : ''}`} onClick={() => setMicOn((v) => !v)}>
-                {micOn ? 'Mic on' : 'Use mic'}
-              </button>
-              <button className={`wb-btn ${camOn ? 'active' : ''}`} onClick={() => setCamOn((v) => !v)}>
-                {camOn ? 'Camera on' : 'Use camera'}
-              </button>
-              <div className="wb-knob-row">
-                <Knob
-                  label="Wind×"
-                  value={windSens}
-                  min={0.2}
-                  max={4}
-                  step={0.1}
-                  reset={1}
-                  onChange={setWindSens}
-                  format={(v) => `${v.toFixed(1)}×`}
-                />
-              </div>
-            </div>
-          </>
-        )}
+        {/* Inputs work under ANY transport (the router talks to engine.ingest*
+            directly), so the rail must not vanish in Hardware mode — that is
+            the mode used at the actual show. Only Auto-demo is sim-specific. */}
+        <div className="wb-rail-sec">Inputs</div>
+        <div className="wb-rail-group">
+          <button className={`wb-btn ${showMatrix ? 'active' : ''}`} onClick={() => setShowMatrix((v) => !v)}>
+            ▦ Routing
+          </button>
+          <button className={`wb-btn ${showKeys ? 'active' : ''}`} onClick={() => setShowKeys((v) => !v)}>
+            ⌨ Keys
+          </button>
+          <button className={`wb-btn wb-btn-ctrl ${showPair ? 'active' : ''}`} onClick={() => setShowPair((v) => !v)}>
+            <span className={`wb-dot ${anyDeviceConnected ? 'connected' : ''}`} style={{ marginRight: 6 }} />⧉ Controllers
+            {devicePeers.reduce((a, b) => a + b, 0) > 0 && ` · ${devicePeers.reduce((a, b) => a + b, 0)}`}
+          </button>
+          {mode === 'sim' && (
+            <button className={`wb-btn ${autoDemo ? 'active' : ''}`} onClick={() => setAutoDemo((v) => !v)}>
+              Auto-demo
+            </button>
+          )}
+          <button className={`wb-btn ${micOn ? 'active' : ''}`} onClick={() => setMicOn((v) => !v)}>
+            {micOn ? 'Mic on' : 'Use mic'}
+          </button>
+          <button className={`wb-btn ${camOn ? 'active' : ''}`} onClick={() => setCamOn((v) => !v)}>
+            {camOn ? 'Camera on' : 'Use camera'}
+          </button>
+          <div className="wb-knob-row">
+            <Knob
+              label="Wind×"
+              value={windSens}
+              min={0.2}
+              max={4}
+              step={0.1}
+              reset={1}
+              onChange={setWindSens}
+              format={(v) => `${v.toFixed(1)}×`}
+            />
+          </div>
+        </div>
 
         <div className="wb-rail-sec">Scene</div>
         <div className="wb-rail-group">

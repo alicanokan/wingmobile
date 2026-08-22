@@ -23,6 +23,14 @@ export class Emitter {
   emit(event: EngineEvent): void {
     const set = this.handlers[event.type] as Set<Handler<typeof event.type>> | undefined;
     if (!set) return;
-    for (const h of set) (h as (e: EngineEvent) => void)(event);
+    // One throwing subscriber must not silence the others (audio + visuals +
+    // LED all hang off this bus), nor propagate back into the ingest path.
+    for (const h of set) {
+      try {
+        (h as (e: EngineEvent) => void)(event);
+      } catch (err) {
+        console.error(`[engine] "${event.type}" handler failed:`, err);
+      }
+    }
   }
 }

@@ -98,6 +98,23 @@ class LedService {
     this.link.onNodes((nodes) => this.adoptDiscovered(nodes));
     // the monitor reports what is genuinely on the wire, not what we meant
     this.link.onLed((id, cmd) => this.pushTrace({ id, cmd, reason: 'wire', at: performance.now() }));
+
+    // Each route is its own page load, so /conductor's panel and /feather2's
+    // streamer are SEPARATE instances of this singleton. `storage` fires in
+    // every OTHER page when one writes localStorage — that's exactly the
+    // cross-page channel needed so Blackout / Master / Rate / fixture edits
+    // made at the console actually govern the page that is streaming frames.
+    window.addEventListener('storage', (e) => {
+      if (e.key === CONFIG_KEY) {
+        this.config = loadConfig();
+        this.router.setRate(this.config.rateHz);
+        this.changed();
+      } else if (e.key === FIXTURES_KEY) {
+        this.fixtures = loadFixtures();
+        this.router.setFixtures(this.fixtures);
+        this.changed();
+      }
+    });
   }
 
   // ---- subscriptions -------------------------------------------------------
@@ -180,11 +197,14 @@ class LedService {
     this.pushTrace({ id, cmd: { mode: 'solid', r: 255, g: 255, b: 255, intensity: 1 }, reason: 'identify', at: performance.now() });
   }
 
-  /** Send every fixture black immediately, ignoring rate and change gates. */
+  /** Send every fixture black immediately, ignoring rate and change gates —
+   *  and LATCH via blackout, so the next push() can't quietly resume the show.
+   *  (The old resync() here meant "all off" lasted exactly one frame.)
+   *  Un-tick Blackout in the panel to resume. */
   allOff(): void {
     const off: LedCommand = { mode: 'off', r: 0, g: 0, b: 0, intensity: 0 };
     for (const f of this.fixtures) this.link.publishLed(f.id, off);
-    this.router.resync();
+    this.setConfig({ blackout: true });
   }
 
   private pushTrace(t: LedTrace) {
@@ -199,7 +219,14 @@ class LedService {
    * the router's rate gate returns an empty array most frames.
    */
   push(inputs: Omit<LedInputs, 'master' | 'blackout'>): void {
-    if (!this.config.enabled || !this.fixtures.length) return;
+    if (!this.config.enabled) return;
+    // The producing page (/feather2) never had a connect button — honour
+    // autoConnect here so the stream reaches the wire without the operator
+    // having to open a console on the same page.
+    if (this.config.autoConnect && this.link.status === 'idle') {
+      this.connect();
+    }
+    if (!this.fixtures.length) return;
     const now = performance.now();
     const emissions = this.router.tick(now, {
       ...inputs,

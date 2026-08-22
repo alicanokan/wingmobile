@@ -112,6 +112,11 @@ export function LedPanel() {
             onChange={(e) => ledService.setConfig({ blackout: e.target.checked })} />
           <span>Blackout</span>
         </label>
+        <label className="cond-check" title="Let the projection page (/feather2) open the broker link itself when it starts streaming">
+          <input type="checkbox" checked={cfg.autoConnect}
+            onChange={(e) => ledService.setConfig({ autoConnect: e.target.checked })} />
+          <span>Auto-connect</span>
+        </label>
         <button className="wb-btn" onClick={() => ledService.allOff()}>All off</button>
       </div>
 

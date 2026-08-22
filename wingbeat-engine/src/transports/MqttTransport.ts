@@ -35,6 +35,7 @@ export class MqttTransport extends BaseTransport {
 
   private client: MqttClient | null = null;
   private opts: MqttOptions;
+  private staleTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: MqttOptions) {
     super();
@@ -69,6 +70,11 @@ export class MqttTransport extends BaseTransport {
 
     client.on('message', (topic, msg) => this.onMessage(topic, msg));
 
+    // A node whose TCP session survives but whose packets stop (weak wifi,
+    // brownout) never triggers the broker's LWT — the engine's own staleness
+    // sweep is the only thing that turns its dot grey. Same cadence as sim.
+    this.staleTimer = setInterval(() => engine.tickStaleness(), 2000);
+
     // ---- Outbound: engine commands → MQTT ----
     this.detachers.push(
       engine.on('led', ({ id, cmd }) => {
@@ -100,6 +106,8 @@ export class MqttTransport extends BaseTransport {
   }
 
   disconnect(): void {
+    if (this.staleTimer) clearInterval(this.staleTimer);
+    this.staleTimer = null;
     this.client?.end(true);
     this.client = null;
     super.disconnect();

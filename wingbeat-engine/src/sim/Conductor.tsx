@@ -50,6 +50,8 @@ import {
   getLive,
   pushLive,
   onLiveChange,
+  getConductorSecret,
+  setConductorSecret,
   type CloudSample,
   type CloudPreset,
   type ConductorConfig,
@@ -318,6 +320,9 @@ export default function Conductor() {
   const [cfg, setCfg] = useState<ConductorConfig>(() => ({ preset: defaultPreset(DEFAULT_FEATHER), sensorSamples: {} }));
   const [presetName, setPresetName] = useState('');
   const [liveMode, setLiveMode] = useState(false);
+  // Cloud writes are secret-gated in Postgres; the conducting device holds
+  // the secret in localStorage and sends it with every push/save/delete.
+  const [secret, setSecret] = useState(getConductorSecret);
   const [status, setStatus] = useState('connecting to the cloud database…');
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -667,6 +672,7 @@ export default function Conductor() {
     }
     if (skipFirstLivePush.current) {
       skipFirstLivePush.current = false; // don't re-push just for turning it on…
+      return;
     }
     const id = setTimeout(() => void doPush(true), 600);
     return () => clearTimeout(id);
@@ -759,6 +765,18 @@ export default function Conductor() {
           <button className={`wb-btn ${anyTesting ? 'active' : ''}`} onClick={toggleTestAll} title="Monitor all 5 channels — audible only, no pulse and nothing pushed live">
             {anyTesting ? '■ Stop' : '▶ Test all'}
           </button>
+          <input
+            className="wb-input"
+            type="password"
+            value={secret}
+            placeholder="conductor secret"
+            title="Required for every cloud write (push live, save/delete presets and samples). Reads never need it."
+            style={{ width: 130 }}
+            onChange={(e) => {
+              setSecret(e.target.value);
+              setConductorSecret(e.target.value);
+            }}
+          />
           <label className={`wb-btn cond-livemode ${liveMode ? 'active' : ''}`}>
             <input type="checkbox" checked={liveMode} onChange={(e) => setLiveMode(e.target.checked)} />
             ● Live mode

@@ -248,9 +248,9 @@ export class WingbeatEngine {
   }
 
   /** Auto-generated melody/perc/accent triggers (the "pulsating" generative
-   *  engine). Off by default so the piece starts driven purely by sensors +
-   *  loaded loops; turn ON to layer the generative pulse over that. */
-  patternsOn = false;
+   *  engine). ON by default — a fresh boot must make sound when sensors fire;
+   *  the console rail has a toggle for ambient-only (sensor + loop) moments. */
+  patternsOn = true;
   setPatterns(on: boolean) {
     this.patternsOn = on;
   }

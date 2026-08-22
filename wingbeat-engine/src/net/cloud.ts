@@ -16,6 +16,39 @@ import type { FeatherPreset } from '../sim/rig.ts';
 
 const BUCKET = 'wingbeat-samples';
 
+// ---- Conductor secret --------------------------------------------------------
+//
+// Reads are public; every WRITE goes through a SECURITY DEFINER function in
+// Postgres that checks this secret, so a random visitor to the deployed site
+// cannot push config to the installation or touch the library. The secret is
+// entered once on the conducting device and kept in localStorage.
+
+const SECRET_KEY = 'wb.conductorSecret.v1';
+
+export function getConductorSecret(): string {
+  try {
+    return localStorage.getItem(SECRET_KEY) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function setConductorSecret(secret: string): void {
+  try {
+    localStorage.setItem(SECRET_KEY, secret.trim());
+  } catch { /* private mode — secret lives for the session only */ }
+}
+
+/** Map an RPC failure to something an operator can act on mid-show. */
+function writeError(prefix: string, error: { message?: string } | null): Error {
+  const msg = error?.message ?? 'unknown error';
+  return new Error(
+    msg.includes('bad conductor secret')
+      ? `${prefix}: this device is missing the conductor secret — paste it in the Live bar on /conductor`
+      : `${prefix}: ${msg}`,
+  );
+}
+
 // ---- Samples ---------------------------------------------------------------
 
 export interface CloudSample {
@@ -54,18 +87,30 @@ export async function uploadSample(file: File, feather: string | null = null): P
     contentType: file.type || 'audio/mpeg',
   });
   if (upErr) throw new Error(`Upload failed for "${file.name}": ${upErr.message}`);
-  const { data, error } = await supabase
-    .from('wingbeat_samples')
-    .insert({ name: file.name, feather, storage_path: path, mime: file.type || null, size_bytes: file.size })
-    .select()
-    .single();
-  if (error) throw new Error(`Couldn't register "${file.name}": ${error.message}`);
+  // Registering the row is what puts a sample in the library — that's the
+  // secret-gated step. (A junk upload without the secret never becomes
+  // visible to any device.)
+  const { data, error } = await supabase.rpc('wingbeat_register_sample', {
+    p_secret: getConductorSecret(),
+    p_name: file.name,
+    p_feather: feather,
+    p_path: path,
+    p_mime: file.type || null,
+    p_size: file.size,
+  });
+  if (error) throw writeError(`Couldn't register "${file.name}"`, error);
   return data as CloudSample;
 }
 
 export async function deleteSample(s: CloudSample): Promise<void> {
+  // Best-effort direct removal (works until the lockdown migration drops the
+  // public delete policy); the RPC also removes the storage object row.
   await supabase.storage.from(BUCKET).remove([s.storage_path]);
-  await supabase.from('wingbeat_samples').delete().eq('id', s.id);
+  const { error } = await supabase.rpc('wingbeat_delete_sample', {
+    p_secret: getConductorSecret(),
+    p_id: s.id,
+  });
+  if (error) throw writeError(`Couldn't delete "${s.name}"`, error);
   await cacheDelete(s.id);
 }
 
@@ -114,17 +159,22 @@ export async function listCloudPresets(feather?: string): Promise<CloudPreset[]>
 }
 
 export async function saveCloudPreset(name: string, feather: string, config: ConductorConfig): Promise<CloudPreset> {
-  const { data, error } = await supabase
-    .from('wingbeat_presets')
-    .upsert({ name, feather, config, updated_at: new Date().toISOString() }, { onConflict: 'feather,name' })
-    .select()
-    .single();
-  if (error) throw new Error(`Couldn't save preset "${name}": ${error.message}`);
+  const { data, error } = await supabase.rpc('wingbeat_save_preset', {
+    p_secret: getConductorSecret(),
+    p_name: name,
+    p_feather: feather,
+    p_config: config,
+  });
+  if (error) throw writeError(`Couldn't save preset "${name}"`, error);
   return data as CloudPreset;
 }
 
 export async function deleteCloudPreset(id: string): Promise<void> {
-  await supabase.from('wingbeat_presets').delete().eq('id', id);
+  const { error } = await supabase.rpc('wingbeat_delete_preset', {
+    p_secret: getConductorSecret(),
+    p_id: id,
+  });
+  if (error) throw writeError(`Couldn't delete preset`, error);
 }
 
 // ---- Live state ---------------------------------------------------------------
@@ -146,10 +196,15 @@ export async function getLive(): Promise<LiveState | null> {
 /** Push a conductor config to the whole installation. Every connected device
  *  (console, /feather displays, phones through the console) applies it live. */
 export async function pushLive(feather: string, config: ConductorConfig, presetId: string | null = null): Promise<void> {
-  const { error } = await supabase
-    .from('wingbeat_live')
-    .upsert({ id: 1, feather, preset_id: presetId, config, updated_at: new Date().toISOString() });
-  if (error) throw new Error(`Couldn't push live: ${error.message}`);
+  // Server stamps updated_at (now()), so ordering no longer depends on the
+  // conducting laptop's clock.
+  const { error } = await supabase.rpc('wingbeat_push_live', {
+    p_secret: getConductorSecret(),
+    p_feather: feather,
+    p_config: config,
+    p_preset_id: presetId,
+  });
+  if (error) throw writeError(`Couldn't push live`, error);
 }
 
 /** Subscribe to live-state changes. Returns an unsubscribe function. */
