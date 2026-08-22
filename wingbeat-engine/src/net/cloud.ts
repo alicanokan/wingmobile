@@ -12,7 +12,7 @@
 
 import { supabase, SUPABASE_URL } from './supabaseClient.ts';
 import { cacheGet, cachePut, cacheDelete } from './sampleCache.ts';
-import type { FeatherPreset } from '../sim/rig.ts';
+import { validatePreset, type FeatherPreset } from '../sim/rig.ts';
 
 const BUCKET = 'wingbeat-samples';
 
@@ -67,9 +67,37 @@ export interface SampleRef {
   id: string;
   name: string;
   path: string;
+  /** byte length as registered — lets a device reject a truncated or
+   *  captive-portal download instead of caching it forever */
+  size?: number;
 }
 
-export const sampleRef = (s: CloudSample): SampleRef => ({ id: s.id, name: s.name, path: s.storage_path });
+export const sampleRef = (s: CloudSample): SampleRef => ({
+  id: s.id,
+  name: s.name,
+  path: s.storage_path,
+  ...(typeof s.size_bytes === 'number' && s.size_bytes > 0 ? { size: s.size_bytes } : {}),
+});
+
+// ---- Device identity ---------------------------------------------------------
+// A stable per-browser id, stamped into every live push as `origin`. Today it
+// only makes the live row attributable ("which laptop pushed this?"); it is
+// the hook that stops echo loops if devices ever write back.
+const CLIENT_KEY = 'wb.clientId.v1';
+let clientIdMemo = '';
+export function clientId(): string {
+  if (clientIdMemo) return clientIdMemo;
+  try {
+    clientIdMemo = localStorage.getItem(CLIENT_KEY) ?? '';
+    if (!/^[a-z0-9-]{8,}$/.test(clientIdMemo)) {
+      clientIdMemo = crypto.randomUUID();
+      localStorage.setItem(CLIENT_KEY, clientIdMemo);
+    }
+  } catch {
+    clientIdMemo = clientIdMemo || crypto.randomUUID();
+  }
+  return clientIdMemo;
+}
 
 export async function listSamples(): Promise<CloudSample[]> {
   const { data, error } = await supabase
@@ -124,9 +152,22 @@ export function sampleUrl(pathOrRef: string | SampleRef): string {
  *  the remaining loops forever — liveSync installs loops one after another. */
 const FETCH_TIMEOUT_MS = 20000;
 
-export async function fetchSampleBuffer(ref: SampleRef): Promise<ArrayBuffer> {
+// One download per sample id at a time: a push that maps the same sample to
+// three sensors, or a preset recall racing a push, shares one fetch.
+const inflight = new Map<string, Promise<ArrayBuffer>>();
+
+export function fetchSampleBuffer(ref: SampleRef): Promise<ArrayBuffer> {
+  const running = inflight.get(ref.id);
+  if (running) return running;
+  const p = fetchSampleBufferOnce(ref).finally(() => inflight.delete(ref.id));
+  inflight.set(ref.id, p);
+  return p;
+}
+
+async function fetchSampleBufferOnce(ref: SampleRef): Promise<ArrayBuffer> {
   const cached = await cacheGet(ref.id);
-  if (cached) return cached;
+  if (cached && (!ref.size || cached.byteLength === ref.size)) return cached;
+  if (cached) await cacheDelete(ref.id); // a cached blob of the wrong length is poison
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
   let res: Response;
@@ -142,7 +183,16 @@ export async function fetchSampleBuffer(ref: SampleRef): Promise<ArrayBuffer> {
     clearTimeout(timer);
   }
   if (!res.ok) throw new Error(`Couldn't download "${ref.name}" (${res.status})`);
+  // A captive portal answers any URL with 200 + an HTML login page. Cached
+  // blindly, that page became the sample on this device until someone
+  // cleared site data.
+  const type = (res.headers.get('content-type') ?? '').toLowerCase();
+  if (type.startsWith('text/html')) throw new Error(`"${ref.name}" came back as a web page — captive portal or wrong URL?`);
   const buf = await res.arrayBuffer();
+  if (ref.size && buf.byteLength !== ref.size) {
+    throw new Error(`"${ref.name}" downloaded ${buf.byteLength} bytes, expected ${ref.size} — not caching`);
+  }
+  if (buf.byteLength < 64) throw new Error(`"${ref.name}" is empty`);
   await cachePut(ref.id, buf);
   return buf;
 }
@@ -150,13 +200,49 @@ export async function fetchSampleBuffer(ref: SampleRef): Promise<ArrayBuffer> {
 // ---- Conductor presets -------------------------------------------------------
 
 /** Everything the conductor sets for one feather, as one recallable unit. */
+export const CONDUCTOR_CONFIG_VERSION = 1;
+
 export interface ConductorConfig {
+  /** schema version — devices refuse what they don't understand rather than guess */
+  v?: number;
+  /** clientId() of the device that pushed it */
+  origin?: string;
   /** The full rig: per-sensor motion/reach/attack/release/sensitivity/layers + global reaction. */
   preset: FeatherPreset;
   /** sensorId → which library sample loops on that sensor (null = none). */
   sensorSamples: Record<string, SampleRef | null>;
   /** Optional culture-scene override for this feather. */
   scene?: string;
+}
+
+/** Coerce a live/preset blob into a valid ConductorConfig, or null if it is
+ *  not one at all (no preset) or from a future schema. */
+export function validateConductorConfig(raw: unknown): ConductorConfig | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.v === 'number' && r.v > CONDUCTOR_CONFIG_VERSION) {
+    console.warn(`[wingbeat] live config is schema v${r.v}; this build understands v${CONDUCTOR_CONFIG_VERSION}`);
+    return null;
+  }
+  if (!r.preset || typeof r.preset !== 'object') return null;
+  const sensorSamples: Record<string, SampleRef | null> = {};
+  if (r.sensorSamples && typeof r.sensorSamples === 'object') {
+    for (const [k, v] of Object.entries(r.sensorSamples as Record<string, unknown>)) {
+      if (v === null) { sensorSamples[k] = null; continue; }
+      if (!v || typeof v !== 'object') continue;
+      const x = v as Record<string, unknown>;
+      if (typeof x.id === 'string' && typeof x.name === 'string' && typeof x.path === 'string' && !x.path.includes('..')) {
+        sensorSamples[k] = { id: x.id, name: x.name, path: x.path, ...(typeof x.size === 'number' && x.size > 0 ? { size: x.size } : {}) };
+      }
+    }
+  }
+  return {
+    v: typeof r.v === 'number' ? r.v : 0,
+    ...(typeof r.origin === 'string' ? { origin: r.origin } : {}),
+    preset: validatePreset(r.preset),
+    sensorSamples,
+    ...(typeof r.scene === 'string' ? { scene: r.scene } : {}),
+  };
 }
 
 export interface CloudPreset {
@@ -218,7 +304,7 @@ export async function pushLive(feather: string, config: ConductorConfig, presetI
   const { error } = await supabase.rpc('wingbeat_push_live', {
     p_secret: getConductorSecret(),
     p_feather: feather,
-    p_config: config,
+    p_config: { ...config, v: CONDUCTOR_CONFIG_VERSION, origin: clientId() } satisfies ConductorConfig,
     p_preset_id: presetId,
   });
   if (error) throw writeError(`Couldn't push live`, error);

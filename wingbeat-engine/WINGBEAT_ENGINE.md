@@ -40,8 +40,8 @@ laptop simulation or the real forest install unchanged:
 |---|---|---|
 | **Mic** (`MicSource`) | Laptop microphone → smoothed 0..1 level. "Breathe at the screen." Sim stand-in for the ESP electret breath sensor. | `src/sim/mic.ts` |
 | **Laptop camera** (`CameraSource`) | Webcam motion-theremin: frame-diff → motion energy (volume) + horizontal centre (position). | `src/sim/camera.ts` |
-| **Phone camera (QR)** (`CamSender`) | Phone opens `/cam`, runs the same motion detection **locally**, streams only motion numbers over the LAN relay. Video never leaves the phone. | `src/sim/CamSender.tsx`, `src/sim/camNet.ts` |
-| **Phone controller (QR)** (`Controller`) | Phone opens `/controller`, pairs over WebRTC, sends a motion pad / accelerometer + scene / tempo / volume. Up to 5 phones (D1–D5). | `src/sim/Controller.tsx`, `src/net/link.ts` |
+| **Phone camera (QR)** (`CamSender`) | `/cam` — **parked (decision 2026-08-16: leave as is).** Its relay is a Vite dev-server plugin that never existed on the deploy and nothing consumes its messages; it has never worked in this repo. The working phone path is `/controller`. | `src/sim/CamSender.tsx`, `src/sim/camNet.ts` |
+| **Phone controller (QR)** (`Controller`) | Phone opens `/controller`, pairs over WebRTC, sends a motion pad / accelerometer + scene / tempo / volume. Up to 5 phones (D1–D5). Rooms persist across console reloads; phones re-dial with backoff; every frame is validated (`parseControl`). | `src/sim/Controller.tsx`, `src/net/link.ts` |
 | **Keyboard** | Keys `q w e r t` fire the 5 sensor slots as enveloped pulses (amount + release). | `src/sim/KeyboardPanel.tsx`, `src/sim/inputs.ts` |
 | **Manual (operator map)** | Click/press-and-hold a sensor diamond on the room map to "blow" on it. | `src/sim/OperatorMap.tsx`, `SimTransport` |
 | **Auto-demo** | Synthetic gusts/presence on every ring sensor so the piece animates itself. | `src/transports/SimTransport.ts` |
@@ -62,11 +62,11 @@ feather parts. 📄 `src/sim/inputs.ts`, `src/sim/InputMatrix.tsx`, `src/sim/cha
 |---|---|---|
 | **Transport interface** | The one seam between "simulation" and "real install". Inbound sensor readings + outbound LED/audio. | `src/transports/Transport.ts` |
 | **SimTransport** | Runs everything in the browser (manual / mic / auto-demo). | `src/transports/SimTransport.ts` |
-| **MqttTransport** | Hardware bridge — speaks the ESP MQTT topic schema byte-for-byte. | `src/transports/MqttTransport.ts` |
-| **WebRTC link** (PeerJS) | Pairs phones to the console from a static deploy, no backend. STUN + public TURN. | `src/net/link.ts` |
-| **Cross-window sync** | Console broadcasts wind/presence/scene/feather at ~30 Hz to the `/feather` display window. | `src/sim/sync.ts` |
-| **Live conductor sync** | Every engine device subscribes to the cloud "live" row and applies pushes (rig, feather, scene, loop samples). | `src/net/liveSync.ts` |
-| **Phone-cam net protocol** | Message shape + relay URL for `/cam`. | `src/sim/camNet.ts` |
+| **MqttTransport** | Hardware bridge — topics/payloads come from the shared **wire contract** (`src/protocol/wire.ts`, which also generates `wingbeat-system/docs/mqtt-topics.md`). Arbitrates its LED commands against the light router. | `src/transports/MqttTransport.ts`, `src/protocol/wire.ts` |
+| **WebRTC link** (PeerJS) | Pairs phones to the console from a static deploy. Signalling server + STUN/TURN are configurable (Vite env or Settings → Network, `wb.net.v1`); the free PeerJS cloud + public TURN remain the fallback. See `docs/VENUE_KIT.md`. | `src/net/link.ts` |
+| **Cross-window sync** | Console broadcasts wind/presence/scene/feather **+ live audio levels** at 25 Hz to the `/feather` display window (validated, versioned frames). The display is audio-reactive from the mirrored levels without an audio context of its own. | `src/sim/sync.ts` |
+| **Live conductor sync** | Every engine device subscribes to the cloud "live" row and applies pushes (rig, feather, scene, loop samples). Server-stamped monotonic ordering, validated configs, generation-guarded loop installs, re-read on online/visible, and a `☁` channel-state chip on the console. | `src/net/liveSync.ts` |
+| **Light link** (`LedLink`) | The light router's own MQTT client (QoS 0 colour stream, node discovery, wire monitor). Shares the wire contract with MqttTransport. | `src/led/LedLink.ts`, `src/led/ledService.ts` |
 
 ---
 
@@ -86,8 +86,9 @@ feather parts. 📄 `src/sim/inputs.ts`, `src/sim/InputMatrix.tsx`, `src/sim/cha
 
 - **Audio playback** → the Audio engine (section 5).
 - **Visual feather** → the Feather / Projection engine (section 6).
-- **LED / hardware** → `led` events out via MqttTransport.
-- **MIDI out** — agreed but **not built yet**; see "Planned" at the bottom.
+- **LED / hardware** → two pipelines on one topic, arbitrated per node: the engine's event-driven modes via MqttTransport, and the light router's colour stream via LedLink (`src/led/`, decision Q1 2026-08-16).
+- **MIDI out** → `src/midi/MidiOut.ts` (built 2026-08-22): melody/perc/accent → notes, wind → CC, scene → program change. Settings → MIDI out.
+- **OSC out** — planned as the next bus consumer (needs a WebSocket→UDP bridge; browsers can't send UDP). Same shape as MidiOut.
 
 ---
 
@@ -135,8 +136,9 @@ motion shape, its loop's EQ band, and its envelope. <!-- ✎ EDIT: correct chain
 | Module | What it does | 📄 File |
 |---|---|---|
 | **Cloud DB (Supabase)** | `wingbeat_samples` (audio library), `wingbeat_presets` (named conductor presets), `wingbeat_live` (the one row every device follows). | `src/net/cloud.ts`, `src/net/supabaseClient.ts` |
-| **Sample cache (IndexedDB)** | Downloads each sample once; keeps playing if venue internet drops. | `src/net/sampleCache.ts` |
-| **Presets** | Portable named presets (recall on any feather) + per-feather auto-"last" + JSON export/import. | `src/sim/presets.ts` |
+| **Sample cache (IndexedDB)** | Downloads each sample once (deduped, length- and content-type-checked); 250 MB LRU cap; quota errors surfaced. Keeps playing if venue internet drops. | `src/net/sampleCache.ts` |
+| **Presets (v2)** | Portable named presets bundle rig + scene + input routing + mixer + cloud sample refs; v1 migrates on read; every load validated. Per-feather auto-"last"; JSON export/import; confirm before overwrite/delete. | `src/sim/presets.ts`, `src/sim/rig.ts` (`validatePreset`) |
+| **Persisted state** | Versioned localStorage keys with validators: console (`wb.console.v1`), mixer (`wb.mixer.v1`), mic/cam calibration (`wb.mic.v1`/`wb.cam.v1`), routing (`wb.routing.v2`), LED patch, phone rooms (`wb.devices.v1`), network (`wb.net.v1`), MIDI (`wb.midi.v1`). | `src/sim/persisted.ts` |
 
 ---
 
@@ -146,7 +148,8 @@ motion shape, its loop's EQ band, and its envelope. <!-- ✎ EDIT: correct chain
 |---|---|---|
 | **Audio outputs** | Tone.js → speakers, panned per room position (4 corner speakers modelled). | `src/engine/AudioEngine.ts`, `src/engine/spatial.ts` |
 | **Video / projection outputs** | The `/feather` display window (2nd screen, fullscreen), console projection panel, mobile feather view. | `src/sim/FeatherView.tsx`, `src/sim/Projection.tsx` |
-| **LED / hardware outputs** | `led` events → `wingbeat/node/<id>/cmd/led` (off/solid/pulse/shimmer/wind/rainbow). | `src/transports/MqttTransport.ts` |
+| **LED / hardware outputs** | `wingbeat/node/<id>/cmd/led` from two arbitrated pipelines (engine events at QoS 1, router stream at QoS 0, both `src`-tagged). Fixture sources: Elements (from `/feather2`), Sensor (from the console), Mirror, Engine, Off. Blackout is global. | `src/led/`, `src/transports/MqttTransport.ts` |
+| **MIDI out** | Engine bus → Web MIDI (notes, CCs, program change) for DAWs / hardware synths. | `src/midi/MidiOut.ts` |
 
 <!-- ✎ EDIT: any output missing? (DMX lighting? OSC out? recording/GIF export?) -->
 
@@ -169,7 +172,7 @@ Each = an LED/line tint + a held drone chord + a melody scale. 📄 `src/engine/
 ## 10. App shell, entry points & control panels
 *Not "engines" but the surfaces that drive them.*
 
-- **Entry points** (`main.tsx`): `/` operator console · `/feather` display · `/cam` phone camera · `/controller` phone remote · `/conductor` preset generator.
+- **Entry points** (`main.tsx`, exact-match routing + 404 + error boundary): `/` operator console · `/feather` display · `/feather2` music-driven feather + light source · `/experience` single-screen experience · `/controller` phone remote · `/conductor` preset generator + Light Engine · `/cam` (parked, see §1).
 - **Landing** — Fullscreen / Control / Mobile entry. 📄 `Landing.tsx`
 - **Operator console** — wires engine + audio + transport; map + feather. 📄 `App.tsx`
 - **Conductor** — per-sensor sample/effect/sensitivity/EQ/envelope + global reaction; saves presets; "Push live". 📄 `Conductor.tsx`
@@ -186,18 +189,29 @@ Each = an LED/line tint + a held drone chord + a melody scale. 📄 `src/engine/
    installation's sound can be produced outside the browser. MIDI **input** is
    not wanted. Nothing exists in code today — see "Planned" below.
 
-## ⏳ Planned — MIDI out (not built)
+## ✅ Built — MIDI out (2026-08-22)
 
-Agreed direction, no code yet. Natural shape given the current engine: a new
-consumer subscribing to the same bus every other output uses (like AudioEngine
-does), translating engine events → Web MIDI:
+`src/midi/MidiOut.ts`, a bus consumer exactly like AudioEngine:
 
-- `melody` / `perc` / `accent` events → note-on with velocity
-- per-sensor activation (the pulse air / envelope level) → CC per channel
-- `scene` change → program change
+- `melody` / `perc` / `accent` → note-on/off (ch 1 / ch 10 / ch 2), velocity from the gesture
+- `wind` (room's loudest breath) → CC 1; each sensor's own wind → CC 20 + index
+- `scene` → program change (index in `SCENE_KEYS`)
 
-📄 Would live alongside `src/engine/AudioEngine.ts` as e.g. `MidiOut.ts`, with a
-device picker in the Conductor or Settings. Nothing in `ConductorConfig` yet.
+Device picker + enable in Settings → **MIDI out**; choice persists (`wb.midi.v1`).
+Output only, as decided. Not part of `ConductorConfig` (it is per-console hardware).
+
+## ⏳ Planned — OSC out
+
+Same shape as MidiOut (a bus consumer), but browsers cannot send UDP, so it
+needs a tiny bridge on the console laptop (WebSocket in → OSC/UDP out, e.g. to
+TouchDesigner). Decision 2026-08-16: future; design noted in WINGBEAT_SOLIDITY.md.
+
+## Solidity
+
+Audit, decisions and changelog: `WINGBEAT_SOLIDITY.md`. Venue setup:
+`docs/VENUE_KIT.md`. Wire contract: `src/protocol/wire.ts` → generated
+`wingbeat-system/docs/mqtt-topics.md`. Tests: `npm test` (Vitest); CI runs
+typecheck + tests + build + doc-drift on every push.
 
 ## ❓ Still open for Alican
 

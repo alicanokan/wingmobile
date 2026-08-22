@@ -14,6 +14,7 @@ import { WingbeatEngine } from '../engine/WingbeatEngine.ts';
 import { AudioEngine } from '../engine/AudioEngine.ts';
 import { SCENES, getScene } from '../engine/scenes.ts';
 import { ledService } from '../led/ledService.ts';
+import { midiOut } from '../midi/MidiOut.ts';
 import { SimTransport } from '../transports/SimTransport.ts';
 import { MqttTransport } from '../transports/MqttTransport.ts';
 import type { Transport, TransportStatus } from '../transports/Transport.ts';
@@ -31,7 +32,8 @@ import { Landing, type EntryMode } from './Landing.tsx';
 import { useTheme, themeClass } from './theme.ts';
 import { MobileMenu } from './MobileMenu.tsx';
 import { startHost, type HostHandle, type LinkStatus } from '../net/link.ts';
-import { useConductorSync } from '../net/liveSync.ts';
+import { useConductorSync, applySensorSamples, lastAppliedSamples } from '../net/liveSync.ts';
+import type { PresetBundle, PresetContext } from './presets.ts';
 import { SettingsPanel } from './SettingsPanel.tsx';
 import { RigPanel } from './RigPanel.tsx';
 import { MicSource } from './mic.ts';
@@ -97,7 +99,7 @@ const savedConsole = loadConsoleState();
 export default function App() {
   // Engine + audio are created once and outlive transport swaps.
   const engine = useMemo(() => new WingbeatEngine(), []);
-  const audio = useMemo(() => new AudioEngine(), []);
+  const audio = useMemo(() => new AudioEngine({ persist: 'wb.mixer.v1' }), []);
 
   const [mode, setMode] = useState<Mode>(savedConsole.mode);
   const [mqttUrl, setMqttUrl] = useState(savedConsole.mqttUrl);
@@ -287,6 +289,9 @@ export default function App() {
               feedDevice(i, c.v);
               break;
             case 'scene':
+              // write-through to the feather→scene map, or the next feather
+              // switch (or reload) snaps the scene back
+              setFeatherScene(featherRef.current, c.key);
               engine.setScene(c.key);
               break;
             case 'bpm': {
@@ -372,10 +377,31 @@ export default function App() {
   const keyToSlotRef = useRef<Record<string, string>>({});
   keyToSlotRef.current = Object.fromEntries(Object.entries(keys).map(([slot, letter]) => [letter, slot]));
 
+  // The feather as of RIGHT NOW (not as of the last render) — for callbacks
+  // that run outside React's cycle (phone controls, preset recall).
+  const featherRef = useRef(feather);
+  featherRef.current = feather;
+
   const chooseFeather = (id: string) => {
+    featherRef.current = id;
     setFeatherState(id);
     engine.setFeather(id); // share through the engine so the whole brain knows
   };
+
+  // ---- presets v2: what travels with the rig ----
+  const presetContext = useCallback((): PresetContext => ({
+    scene: engine.scene,
+    routing: { sources, parts, keys, keyAmount, keyRelease, deviceThresholds },
+    mixer: audio.snapshotMixer(),
+    sensorSamples: lastAppliedSamples(),
+  }), [engine, audio, sources, parts, keys, keyAmount, keyRelease, deviceThresholds]);
+  const onPresetRecall = useCallback((b: PresetBundle) => {
+    if (b.routing) { setRouting(b.routing); saveRouting(b.routing); }
+    if (b.mixer) audio.applyMixer(b.mixer);
+    if (b.scene) { setFeatherScene(featherRef.current, b.scene); engine.setScene(b.scene); }
+    if (b.sensorSamples && Object.keys(b.sensorSamples).length) applySensorSamples(engine, audio, b.sensorSamples);
+    audio.setBpm(rig.global.bpm);
+  }, [engine, audio]);
 
   const nextFeather = () => {
     const currentIndex = FEATHERS.findIndex((f) => f.id === feather);
@@ -394,7 +420,10 @@ export default function App() {
   // Conductor: apply live pushes from /conductor (rig, feather, scene, loop
   // samples) — the conductor page drives every connected device through the
   // shared cloud database.
-  useConductorSync({ engine, audio, onFeather: chooseFeather });
+  const cloudStatus = useConductorSync({ engine, audio, onFeather: chooseFeather });
+
+  // MIDI out rides the same bus as the audio engine (see midi/MidiOut.ts).
+  useEffect(() => midiOut.attach(engine), [engine]);
 
   // Shared input devices — one each, read by the central router (and tuned by
   // their panels). They start when routed to a sensor or opened for tuning.
@@ -658,6 +687,13 @@ export default function App() {
   }, [engine, feather]);
 
   // Gesture detection: swipe left/right to change feathers in fullscreen.
+  // The handlers are bound once per fullscreen session; read the CURRENT
+  // next/prev through refs so a swipe after a feather change doesn't act on
+  // the feather that was selected when the listener was installed.
+  const nextFeatherRef = useRef(nextFeather);
+  const prevFeatherRef = useRef(prevFeather);
+  nextFeatherRef.current = nextFeather;
+  prevFeatherRef.current = prevFeather;
   useEffect(() => {
     if (!fullscreenProjection) return;
 
@@ -685,9 +721,9 @@ export default function App() {
           setSwipeCount(2);
           // Two swipes in same direction - change feather
           if (newDirection === 'right') {
-            prevFeather();
+            prevFeatherRef.current();
           } else {
-            nextFeather();
+            nextFeatherRef.current();
           }
           s.count = 0; // Reset after action
           setTimeout(() => setSwipeCount(0), 400);
@@ -1019,6 +1055,10 @@ export default function App() {
             <span className={`wb-dot ${status}`} />
             {status}
           </span>
+          <span className="wb-status" title="cloud live-follow: would this console hear a conductor push right now?">
+            <span className={`wb-dot ${cloudStatus === 'live' ? 'connected' : cloudStatus === 'error' ? 'error' : cloudStatus === 'closed' ? 'closed' : 'connecting'}`} />
+            ☁ {cloudStatus}
+          </span>
         </div>
 
         <div className="wb-rail-sec">Audio</div>
@@ -1192,7 +1232,7 @@ export default function App() {
       {showScene && <ScenePanel snapshot={snapshot} engine={engine} audio={audio} onClose={() => setShowScene(false)} />}
       {micOn && <MicPanel mic={mic} onClose={() => setMicOn(false)} />}
       {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} />}
-      {showRig && <RigPanel snapshot={snapshot} audio={audio} onClose={() => setShowRig(false)} />}
+      {showRig && <RigPanel snapshot={snapshot} audio={audio} onClose={() => setShowRig(false)} presetContext={presetContext} onPresetRecall={onPresetRecall} />}
       {showSettings && (
         <SettingsPanel
           audio={audio}

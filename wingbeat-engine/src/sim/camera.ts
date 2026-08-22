@@ -11,6 +11,19 @@
 //  PIR/optical-flow sensor, the visual sibling of MicSource's breath sensing.
 // ============================================================================
 
+import { finite, loadJson, saveJson } from './persisted.ts';
+
+const CAL_KEY = 'wb.cam.v1';
+interface CamCal { contrast: number; threshold: number; sensitivity: number; releaseTime: number }
+const loadCal = (): CamCal =>
+  loadJson(CAL_KEY, (raw) => {
+    const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    return {
+      contrast: finite(r.contrast, 1.8, 0.2, 8), threshold: finite(r.threshold, 24, 1, 255),
+      sensitivity: finite(r.sensitivity, 8, 0.1, 100), releaseTime: finite(r.releaseTime, 0.4, 0.02, 5),
+    };
+  });
+
 export interface CameraReading {
   /** Smoothed motion energy 0..1 (fraction of changed pixels × sensitivity). */
   motion: number;
@@ -39,14 +52,20 @@ export class CameraSource {
   private mask: ImageData | null = null;
 
   // Tunables (live-editable from the panel).
-  /** Contrast multiplier around mid-gray. 1 = none, higher = punchier. */
-  contrast = 1.8;
-  /** Per-pixel change (0..255) needed to count as motion. */
-  threshold = 24;
-  /** Maps the raw changed-pixel fraction into a useful 0..1 range. */
-  sensitivity = 8;
-  /** Envelope release in seconds — motion rises instantly, falls over this time. */
-  releaseTime = 0.4;
+  // Calibration persists (wb.cam.v1) — see MicSource for why.
+  private cal: CamCal = loadCal();
+  /** contrast stretch applied before the diff (1 = none) */
+  get contrast(): number { return this.cal.contrast; }
+  set contrast(v: number) { this.cal.contrast = finite(v, 1.8, 0.2, 8); saveJson(CAL_KEY, this.cal); }
+  /** per-pixel change (0..255) that counts as motion */
+  get threshold(): number { return this.cal.threshold; }
+  set threshold(v: number) { this.cal.threshold = finite(v, 24, 1, 255); saveJson(CAL_KEY, this.cal); }
+  /** multiplier from changed-pixel fraction to 0..1 motion */
+  get sensitivity(): number { return this.cal.sensitivity; }
+  set sensitivity(v: number) { this.cal.sensitivity = finite(v, 8, 0.1, 100); saveJson(CAL_KEY, this.cal); }
+  /** envelope release in seconds */
+  get releaseTime(): number { return this.cal.releaseTime; }
+  set releaseTime(v: number) { this.cal.releaseTime = finite(v, 0.4, 0.02, 5); saveJson(CAL_KEY, this.cal); }
 
   private ema = 0;
   private emaX = 0.5;

@@ -7,6 +7,16 @@
 //  ESP8266's electret-mic breath sensing.
 // ============================================================================
 
+import { finite, loadJson, saveJson, str } from './persisted.ts';
+
+const CAL_KEY = 'wb.mic.v1';
+interface MicCal { gain: number; deviceId: string; releaseTime: number }
+const loadCal = (): MicCal =>
+  loadJson(CAL_KEY, (raw) => {
+    const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    return { gain: finite(r.gain, 1, 0.05, 20), deviceId: str(r.deviceId), releaseTime: finite(r.releaseTime, 0.4, 0.02, 5) };
+  });
+
 export class MicSource {
   private ctx: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -14,26 +24,38 @@ export class MicSource {
   private stream: MediaStream | null = null;
   private ema = 0;
 
+  // Calibration persists (wb.mic.v1): a venue's gain + device choice survives
+  // a reload, which is the one moment nobody has time to redo it.
+  private cal: MicCal = loadCal();
   /** Input gain — scales the raw level into a useful 0..1 range. */
-  gain = 1;
+  get gain(): number { return this.cal.gain; }
+  set gain(v: number) { this.cal.gain = finite(v, 1, 0.05, 20); saveJson(CAL_KEY, this.cal); }
   /** Chosen input device (empty = system default). */
-  deviceId = '';
+  get deviceId(): string { return this.cal.deviceId; }
+  set deviceId(v: string) { this.cal.deviceId = str(v); saveJson(CAL_KEY, this.cal); }
   /** Envelope release in seconds — level rises instantly, falls over this time. */
-  releaseTime = 0.4;
+  get releaseTime(): number { return this.cal.releaseTime; }
+  set releaseTime(v: number) { this.cal.releaseTime = finite(v, 0.4, 0.02, 5); saveJson(CAL_KEY, this.cal); }
+
   private rel = 0; // post-release (enveloped) level
   private lastT = 0;
 
   async start(): Promise<void> {
     if (this.ctx) return;
-    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    this.ctx = new Ctx();
-    this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.stream = await navigator.mediaDevices.getUserMedia({
+    // Ask for the device FIRST. If permission is denied the throw happens
+    // before any state is set, so `active` can't claim a mic we never got.
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: this.deviceId ? { deviceId: { exact: this.deviceId } } : true,
     });
-    this.ctx.createMediaStreamSource(this.stream).connect(this.analyser);
-    this.data = new Uint8Array(this.analyser.frequencyBinCount);
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new Ctx();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    this.stream = stream;
+    this.ctx = ctx;
+    this.analyser = analyser;
+    this.data = new Uint8Array(analyser.frequencyBinCount);
   }
 
   /** Switch the input device, restarting the stream if it's already running. */

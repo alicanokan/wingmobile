@@ -14,34 +14,66 @@
 //  the engine reports audioReady.
 // ============================================================================
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { WingbeatEngine } from '../engine/WingbeatEngine.ts';
 import type { AudioEngine } from '../engine/AudioEngine.ts';
 import { loadIntoRig, notifyLayersChange } from '../sim/rig.ts';
 import { saveLast } from '../sim/presets.ts';
+import { setFeatherScene } from '../sim/featherScenes.ts';
 import { SENSOR_CHANNELS } from '../sim/channels.ts';
-import { getLive, onLiveChange, fetchSampleBuffer, type ConductorConfig, type LiveState } from './cloud.ts';
+import { getLive, onLiveChange, fetchSampleBuffer, validateConductorConfig, type ConductorConfig, type LiveState, type LiveSubStatus, type SampleRef } from './cloud.ts';
 
-async function applyLoops(cfg: ConductorConfig, audio: AudioEngine): Promise<void> {
-  for (const c of SENSOR_CHANNELS) {
-    const ref = cfg.sensorSamples?.[c.sensor] ?? null;
+export type SensorSamples = Record<string, SampleRef | null>;
+
+// Only the NEWEST install run may touch the loops: two pushes in quick
+// succession used to interleave (config A's sensor_03 landing after config
+// B's), and a slow download for one sensor blocked the rest. Each run takes a
+// generation number and stops as soon as a newer one starts.
+let loopGen = 0;
+let lastSamples: SensorSamples = {};
+
+/** The sensor→sample map most recently applied on this device (for presets). */
+export function lastAppliedSamples(): SensorSamples {
+  return { ...lastSamples };
+}
+
+async function applyLoops(samples: SensorSamples | undefined, audio: AudioEngine): Promise<void> {
+  const gen = ++loopGen;
+  lastSamples = { ...(samples ?? {}) };
+  // kick off every download at once (cache-first, deduped in cloud.ts), then
+  // install in channel order as each arrives
+  const fetches = SENSOR_CHANNELS.map((c) => {
+    const ref = samples?.[c.sensor] ?? null;
+    return ref ? fetchSampleBuffer(ref).then((buf) => ({ ref, buf })).catch((err: unknown) => ({ ref, err })) : Promise.resolve(null);
+  });
+  for (let i = 0; i < SENSOR_CHANNELS.length; i++) {
+    const sensor = SENSOR_CHANNELS[i].sensor;
+    const r = await fetches[i];
+    if (gen !== loopGen) return; // superseded — a newer push owns the loops now
     try {
-      if (!ref) {
-        audio.clearLoop(c.sensor);
+      if (!r) {
+        audio.clearLoop(sensor);
         continue;
       }
-      const buf = await fetchSampleBuffer(ref);
-      await audio.loadLoopBuffer(c.sensor, buf, ref.name);
+      if ('err' in r) throw r.err;
+      await audio.loadLoopBuffer(sensor, r.buf, r.ref.name);
     } catch (err) {
-      console.warn('[wingbeat] conductor loop failed for', c.sensor, err);
+      console.warn('[wingbeat] conductor loop failed for', sensor, err);
     }
   }
 }
 
-/** Prefetch all of a config's samples into the IndexedDB cache (no audio needed). */
-function prefetch(cfg: ConductorConfig): void {
-  for (const ref of Object.values(cfg.sensorSamples ?? {})) {
-    if (ref) fetchSampleBuffer(ref).catch(() => {});
+/** Install a sensor→sample map now, or the moment audio is unlocked. Used by
+ *  conductor pushes and by local preset recall (v2 presets carry SampleRefs). */
+export function applySensorSamples(engine: WingbeatEngine, audio: AudioEngine, samples: SensorSamples | undefined): void {
+  if (audio.ready) {
+    void applyLoops(samples, audio);
+  } else {
+    for (const ref of Object.values(samples ?? {})) if (ref) fetchSampleBuffer(ref).catch(() => {});
+    const off = engine.on('audioReady', () => {
+      off();
+      void applyLoops(samples, audio);
+    });
   }
 }
 
@@ -67,54 +99,44 @@ export function applyConductorConfig(
   loadIntoRig(preset);
   if (preset.feather) saveLast(preset.feather);
   audio.setBpm(preset.global?.bpm ?? 120);
-  if (cfg.scene) engine.setScene(cfg.scene);
+  // Scene lives in featherScenes (the source of truth the console's
+  // feather→scene effect reads). Writing it there FIRST means the feather
+  // switch below lands on the pushed scene instead of reverting to the
+  // feather's old one — the "remote scene changes revert" bug.
+  if (cfg.scene && preset.feather) setFeatherScene(preset.feather, cfg.scene);
   if (preset.feather) onFeather?.(preset.feather);
+  if (cfg.scene) engine.setScene(cfg.scene);
   notifyLayersChange();
-  if (audio.ready) {
-    void applyLoops(cfg, audio);
-  } else {
-    prefetch(cfg);
-    const off = engine.on('audioReady', () => {
-      off();
-      void applyLoops(cfg, audio);
-    });
-  }
+  applySensorSamples(engine, audio, cfg.sensorSamples);
 }
 
-export function useConductorSync({ engine, audio, onFeather }: ConductorSyncOpts): void {
+/** Returns the realtime channel's state so the UI can say whether this
+ *  device would actually hear a push ("pushed ✓" on the conductor is not
+ *  proof that anyone received it). */
+export function useConductorSync({ engine, audio, onFeather }: ConductorSyncOpts): LiveSubStatus {
   // Refs so the subscription effect doesn't rebind on each render.
   const onFeatherRef = useRef(onFeather);
   onFeatherRef.current = onFeather;
-  const pendingLoops = useRef<ConductorConfig | null>(null);
   const lastApplied = useRef('');
+  const [status, setStatus] = useState<LiveSubStatus>('subscribing');
 
   useEffect(() => {
     let disposed = false;
 
     const apply = (live: LiveState | null) => {
       if (disposed || !live?.config?.preset) return;
-      if (live.updated_at && live.updated_at === lastApplied.current) return;
-      lastApplied.current = live.updated_at ?? '';
-      const cfg = live.config;
-      const preset = cfg.preset;
-
-      loadIntoRig(preset);
-      // Persist as this feather's "last" so Projection's per-feather recall
-      // (which runs on every feather switch) re-applies the SAME config.
-      if (preset.feather) saveLast(preset.feather);
-      audio.setBpm(preset.global?.bpm ?? 120);
-      if (cfg.scene) engine.setScene(cfg.scene);
-      if (preset.feather) onFeatherRef.current?.(preset.feather);
-      notifyLayersChange();
-
-      if (audio.ready) {
-        pendingLoops.current = null;
-        void applyLoops(cfg, audio);
-      } else {
-        // audio not unlocked yet — warm the cache now, install on audioReady
-        pendingLoops.current = cfg;
-        prefetch(cfg);
+      // updated_at is stamped by the server (RPC), so it is monotonic across
+      // devices — a strictly-newer check also rejects a stale row re-delivered
+      // after a reconnect, which plain inequality let through.
+      const at = live.updated_at ?? '';
+      if (at && lastApplied.current && at <= lastApplied.current) return;
+      lastApplied.current = at;
+      const cfg = validateConductorConfig(live.config);
+      if (!cfg) {
+        console.warn('[wingbeat] ignoring malformed live config');
+        return;
       }
+      applyConductorConfig(engine, audio, cfg, (id) => onFeatherRef.current?.(id));
     };
 
     getLive().then(apply).catch(() => {});
@@ -122,20 +144,26 @@ export function useConductorSync({ engine, audio, onFeather }: ConductorSyncOpts
     // that happened while this device was offline would otherwise be missed
     // until the next one, and `apply` dedupes by updated_at so it's cheap.
     const offLive = onLiveChange(apply, (s) => {
+      setStatus(s);
       if (s === 'live') getLive().then(apply).catch(() => {});
     });
-    const offReady = engine.on('audioReady', () => {
-      const cfg = pendingLoops.current;
-      if (cfg) {
-        pendingLoops.current = null;
-        void applyLoops(cfg, audio);
-      }
-    });
+    // Laptop lid closed, phone pocketed, wifi hopped: the realtime socket may
+    // or may not come back on its own. Re-read the row whenever we regain the
+    // network or the tab — cheap, idempotent (dedup above), and it closes the
+    // "pushed while we were asleep" gap.
+    const rearm = () => {
+      if (document.visibilityState === 'hidden') return;
+      getLive().then(apply).catch(() => {});
+    };
+    window.addEventListener('online', rearm);
+    document.addEventListener('visibilitychange', rearm);
 
     return () => {
       disposed = true;
       offLive();
-      offReady();
+      window.removeEventListener('online', rearm);
+      document.removeEventListener('visibilitychange', rearm);
     };
   }, [engine, audio]);
+  return status;
 }

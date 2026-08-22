@@ -19,6 +19,10 @@
 import * as Tone from 'tone';
 import type { WingbeatEngine } from './WingbeatEngine.ts';
 import { getScene } from './scenes.ts';
+import { loadJson, saveJson } from '../sim/persisted.ts';
+import { DEFAULT_GAINS, LAYER_NAMES, validateMixerSnapshot, type MixerSnapshot } from './mixerSnapshot.ts';
+
+export { DEFAULT_GAINS, validateMixerSnapshot, type MixerSnapshot };
 
 export type LayerName = 'bed' | 'wind' | 'melody' | 'perc' | 'accent';
 export type SampleLayer = 'melody' | 'perc' | 'accent';
@@ -39,13 +43,6 @@ export const LAYER_LABELS: Record<LayerName, string> = {
   accent: 'Accent',
 };
 
-const DEFAULT_GAINS: Record<LayerName, number> = {
-  bed: 0.6,
-  wind: 0.85,
-  melody: 0.95,
-  perc: 0.95,
-  accent: 0.8,
-};
 
 const C4 = 261.63;
 
@@ -124,6 +121,55 @@ export class AudioEngine {
   noiseColor: NoiseColor = 'pink';
   reverbWet = 0.35;
   private masterGainValue = 0.7;
+  private persistKey: string | null = null;
+
+  /** `persist`: a localStorage key — the mixer/voices/loop faders survive a
+   *  reload (the console passes 'wb.mixer.v1'; preview engines pass nothing
+   *  so they don't overwrite the desk's settings). */
+  constructor(opts: { persist?: string } = {}) {
+    if (opts.persist) {
+      this.persistKey = opts.persist;
+      const snap = loadJson(opts.persist, validateMixerSnapshot);
+      if (snap) this.applyMixer(snap);
+    }
+  }
+
+  // ---- Mixer snapshot (persistence + presets) ---------------------------
+  snapshotMixer(): MixerSnapshot {
+    const loopMix: MixerSnapshot['loopMix'] = {};
+    for (const [id, v] of this.loopMix) loopMix[id] = { ...v };
+    return {
+      v: 1,
+      mixer: JSON.parse(JSON.stringify(this.mixer)),
+      bedOsc: this.bedOsc,
+      noiseColor: this.noiseColor,
+      reverbWet: this.reverbWet,
+      loopMix,
+    };
+  }
+
+  /** Apply a snapshot to the live graph (or store it for when the graph
+   *  exists). Sample NAMES are restored for display; the bytes must be
+   *  reloaded by whoever owns them (the conductor's SampleRefs do that). */
+  applyMixer(snap: MixerSnapshot): void {
+    for (const l of LAYER_NAMES) {
+      this.mixer[l].gain = snap.mixer[l].gain;
+      this.mixer[l].mute = snap.mixer[l].mute;
+      if (this.ready) this.buses[l].gain.rampTo(this.busLevel(l), 0.1);
+    }
+    this.setBedOsc(snap.bedOsc);
+    this.setNoiseColor(snap.noiseColor);
+    this.setReverbWet(snap.reverbWet);
+    for (const [id, v] of Object.entries(snap.loopMix)) {
+      this.setLoopFader(id, v.gain);
+      this.setLoopMute(id, v.mute);
+    }
+    this.persist();
+  }
+
+  private persist(): void {
+    if (this.persistKey) saveJson(this.persistKey, this.snapshotMixer());
+  }
 
   /** Must be called from a user gesture (browser autoplay policy).
    *  Single-flight: concurrent callers (a click racing a conductor push that
@@ -333,24 +379,29 @@ export class AudioEngine {
   setLayerGain(name: LayerName, g: number) {
     this.mixer[name].gain = g;
     if (this.ready) this.buses[name].gain.rampTo(this.busLevel(name), 0.1);
+    this.persist();
   }
   setLayerMute(name: LayerName, mute: boolean) {
     this.mixer[name].mute = mute;
     if (this.ready) this.buses[name].gain.rampTo(this.busLevel(name), 0.1);
+    this.persist();
   }
 
   // ---- Voices ------------------------------------------------------------
   setBedOsc(type: BedOsc) {
     this.bedOsc = type;
     if (this.ready) this.bed.set({ oscillator: { type } as never });
+    this.persist();
   }
   setNoiseColor(type: NoiseColor) {
     this.noiseColor = type;
     if (this.ready) this.noise.type = type;
+    this.persist();
   }
   setReverbWet(w: number) {
     this.reverbWet = w;
     if (this.ready) this.reverb.wet.rampTo(w, 0.2);
+    this.persist();
   }
 
   // ---- Samples (replace a trigger layer's sound) -------------------------
@@ -577,6 +628,7 @@ export class AudioEngine {
     this.loopMix.set(sensorId, strip);
     const l = this.loops.get(sensorId);
     if (l) l.fader.gain.rampTo(strip.mute ? 0 : g, 0.06);
+    this.persist();
   }
   setLoopMute(sensorId: string, mute: boolean) {
     const strip = this.loopMix.get(sensorId) ?? { gain: 0.8, mute: false };
@@ -584,6 +636,7 @@ export class AudioEngine {
     this.loopMix.set(sensorId, strip);
     const l = this.loops.get(sensorId);
     if (l) l.fader.gain.rampTo(mute ? 0 : strip.gain, 0.06);
+    this.persist();
   }
 
   /** Snapshot of every loop's levels for mirroring to a display window:

@@ -110,6 +110,12 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
       float v = d["intensity"]; if (v < 0) v = 0; if (v > 1) v = 1;
       ledState.intensity = (uint8_t)(v * 255.0f);
     }
+    // Strip-wide brightness cap over MQTT (0..1) — lets the operator dim a
+    // node that is too hot for its spot without retuning every command.
+    if (d.containsKey("brightness")) {
+      float v = d["brightness"]; if (v < 0) v = 0; if (v > 1) v = 1;
+      strip.setBrightness((uint8_t)(v * 255.0f));
+    }
     if (d.containsKey("mode")) {
       const char* m = d["mode"];
       if      (!strcmp(m, "off"))     ledState.mode = LedState::OFF;
@@ -127,6 +133,15 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     const char* action = d["action"] | "";
     if (!strcmp(action, "rainbow")) ledState.mode = LedState::RAINBOW;
     else if (!strcmp(action, "reset")) ESP.restart();
+    else if (!strcmp(action, "calibrate")) {
+      // re-zero: the feather was moved / re-hung, or the room's air changed
+      windEma = 0.0f; motionEma = 0.0f;
+#if USE_MPU6050
+      imu.calcOffsets(true, true);
+#endif
+      Serial.println("[cal] re-zeroed wind + motion baselines");
+    }
+    // "silence" is for audio nodes — ignored here on purpose.
   }
 }
 
@@ -150,6 +165,15 @@ void connectMqtt() {
       mqtt.subscribe(topicGlobalScene().c_str(),  1);
       mqtt.subscribe(topicGlobalAll().c_str(),    1);
       publishStatus(true);
+      // Presence is retained: a node that died while someone stood in front
+      // of it would otherwise leave a phantom "present":true on the broker
+      // until its next edge. Clear it on every (re)connect.
+      {
+        char buf[64];
+        int n = snprintf(buf, sizeof(buf), "{\"present\":false,\"ts\":%lu}", millis());
+        mqtt.publish(topicPresence().c_str(), (uint8_t*)buf, n, /*retain=*/true);
+        presentLast = false;
+      }
     } else {
       Serial.printf(" rc=%d, retry in 2s\n", mqtt.state());
       delay(2000);
@@ -214,11 +238,13 @@ void renderLeds(float windNow, float motionNow) {
       break;
 
     case LedState::SOLID:
+      // gamma-corrected: the router streams solid colours at 15 Hz and a
+      // linear ramp reads as "jumps to full then barely changes" on WS2812s
       for (uint16_t i = 0; i < LED_COUNT; i++) {
-        strip.setPixelColor(i, strip.Color(
+        strip.setPixelColor(i, strip.gamma32(strip.Color(
             (baseR * scaledIntensity) >> 8,
             (baseG * scaledIntensity) >> 8,
-            (baseB * scaledIntensity) >> 8));
+            (baseB * scaledIntensity) >> 8)));
       }
       break;
 

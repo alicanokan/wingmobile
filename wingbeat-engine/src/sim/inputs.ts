@@ -96,7 +96,13 @@ export interface RoutingState {
   deviceThresholds: number[];
 }
 
-export function loadRouting(): RoutingState {
+const VALID_PARTS = new Set(PARTS.map((p) => p.id));
+const fin = (v: unknown, fb: number, lo: number, hi: number) =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fb;
+
+/** Coerce anything (old storage, a preset file, a cloud blob) into a valid
+ *  RoutingState — allowlisted sources/parts, clamped numbers, never throws. */
+export function validateRouting(raw: unknown): RoutingState {
   const base: RoutingState = {
     sources: defaultSourceMap(),
     parts: defaultPartMap(),
@@ -105,26 +111,30 @@ export function loadRouting(): RoutingState {
     keyRelease: 0.25,
     deviceThresholds: Array(DEVICE_COUNT).fill(0),
   };
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return base;
-    const saved = JSON.parse(raw) as Partial<RoutingState>;
-    for (const s of SLOTS) {
-      if (saved.sources?.[s.id] && VALID_SOURCES.has(saved.sources[s.id])) base.sources[s.id] = saved.sources[s.id];
-      if (Array.isArray(saved.parts?.[s.id])) base.parts[s.id] = saved.parts![s.id];
-      if (typeof saved.keys?.[s.id] === 'string') base.keys[s.id] = saved.keys[s.id];
-    }
-    if (typeof saved.keyAmount === 'number') base.keyAmount = saved.keyAmount;
-    if (typeof saved.keyRelease === 'number') base.keyRelease = saved.keyRelease;
-    if (Array.isArray(saved.deviceThresholds)) {
-      for (let i = 0; i < DEVICE_COUNT; i++) {
-        if (typeof saved.deviceThresholds[i] === 'number') base.deviceThresholds[i] = saved.deviceThresholds[i];
-      }
-    }
-  } catch {
-    /* ignore malformed storage */
+  const saved = (raw && typeof raw === 'object' ? raw : {}) as Partial<RoutingState>;
+  for (const s of SLOTS) {
+    const src = saved.sources?.[s.id];
+    if (typeof src === 'string' && VALID_SOURCES.has(src)) base.sources[s.id] = src as SourceKind;
+    const parts = saved.parts?.[s.id];
+    if (Array.isArray(parts)) base.parts[s.id] = parts.filter((p): p is string => typeof p === 'string' && VALID_PARTS.has(p));
+    const key = saved.keys?.[s.id];
+    if (typeof key === 'string' && key.length === 1) base.keys[s.id] = key.toLowerCase();
+  }
+  base.keyAmount = fin(saved.keyAmount, 1, 0, 1);
+  base.keyRelease = fin(saved.keyRelease, 0.25, 0, 5);
+  if (Array.isArray(saved.deviceThresholds)) {
+    for (let i = 0; i < DEVICE_COUNT; i++) base.deviceThresholds[i] = fin(saved.deviceThresholds[i], 0, 0, 1);
   }
   return base;
+}
+
+export function loadRouting(): RoutingState {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    return validateRouting(raw ? JSON.parse(raw) : undefined);
+  } catch {
+    return validateRouting(undefined);
+  }
 }
 
 export function saveRouting(state: RoutingState): void {

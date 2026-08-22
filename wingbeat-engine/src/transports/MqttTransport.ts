@@ -23,8 +23,9 @@ import mqtt, { type MqttClient } from 'mqtt';
 import { BaseTransport } from './Transport.ts';
 import { getScene } from '../engine/scenes.ts';
 import type { WingbeatEngine } from '../engine/WingbeatEngine.ts';
-import type { LedCommand, NodeId, NodeRole } from '../engine/types.ts';
+import type { LedCommand, NodeId } from '../engine/types.ts';
 import type { LedArbiter, LedWire } from '../led/types.ts';
+import { QOS, parseJson, parseLedCmd, parseStatus, parseTopic, topics, type AudioCmdWire, type GlobalAction, type SceneWire } from '../protocol/wire.ts';
 
 export interface MqttOptions {
   /** e.g. ws://10.0.0.4:9001 — the Mosquitto WebSocket listener. */
@@ -78,11 +79,11 @@ export class MqttTransport extends BaseTransport {
 
     client.on('connect', () => {
       this.setStatus('connected');
-      client.subscribe('wingbeat/node/+/sensor/+', { qos: 0 });
-      client.subscribe('wingbeat/node/+/status', { qos: 1 });
+      client.subscribe(topics.anySensor, { qos: QOS.sensor });
+      client.subscribe(topics.anyStatus, { qos: QOS.status });
       // watch the LED topic too: that's how we know a router stream is live
       // for a node (see LedArbiter) even when this page has no LedLink open
-      if (this.opts.led) client.subscribe('wingbeat/node/+/cmd/led', { qos: 0 });
+      if (this.opts.led) client.subscribe(topics.anyCmdLed, { qos: QOS.cmdStream });
       // Announce the engine's current scene so freshly-booted nodes sync up.
       this.publishScene(engine.scene);
     });
@@ -145,13 +146,10 @@ export class MqttTransport extends BaseTransport {
     this.detachers.push(
       engine.on('accent', () => {
         if (!client.connected) return;
+        const cmd: AudioCmdWire = { layer: 'accent', gain: 0.8, play: true };
         for (const node of engine.getNodes()) {
           if (node.role !== 'audio' || !node.online) continue;
-          client.publish(
-            `wingbeat/node/${node.id}/cmd/audio`,
-            JSON.stringify({ layer: 'accent', gain: 0.8, play: true }),
-            { qos: 1 },
-          );
+          client.publish(topics.cmdAudio(node.id), JSON.stringify(cmd), { qos: QOS.cmdAudio });
         }
       }),
     );
@@ -160,10 +158,7 @@ export class MqttTransport extends BaseTransport {
   private publishLed(id: NodeId, cmd: LedCommand) {
     if (!this.client?.connected) return;
     const wire: LedWire = { ...cmd, src: 'engine' };
-    this.client.publish(`wingbeat/node/${id}/cmd/led`, JSON.stringify(wire), {
-      qos: 1,
-      retain: false,
-    });
+    this.client.publish(topics.cmdLed(id), JSON.stringify(wire), { qos: QOS.cmdEvent, retain: false });
   }
 
   /** Re-send the engine's current LED state for nodes it may drive. With
@@ -193,35 +188,24 @@ export class MqttTransport extends BaseTransport {
   // ---- Inbound: MQTT → engine -------------------------------------------
   private onMessage(topic: string, msg: Uint8Array | Buffer) {
     if (!this.engine) return;
-    const parts = topic.split('/');
-    if (parts[0] !== 'wingbeat' || parts[1] !== 'node') return;
-    const id = parts[2];
-    const kind = parts[3];
+    const t = parseTopic(topic);
+    if (!t) return;
+    const payload = parseJson(msg);
+    if (!payload) return;
 
-    let payload: Record<string, unknown>;
-    try {
-      payload = JSON.parse(msg.toString());
-    } catch {
+    if (t.kind === 'cmd') {
+      if (t.cmd === 'led') {
+        const cmd = parseLedCmd(payload);
+        if (cmd) this.opts.led?.noteWire(t.id, cmd);
+      }
       return;
     }
-
-    if (kind === 'cmd' && parts[4] === 'led') {
-      this.opts.led?.noteWire(id, payload as unknown as LedWire);
-      return;
-    }
-
-    if (kind === 'status') {
-      this.engine.ingestStatus(id, {
-        online: Boolean(payload.online),
-        role: payload.role as NodeRole | undefined,
-        fw: payload.fw as string | undefined,
-        rssi: payload.rssi as number | undefined,
-      });
-    } else if (kind === 'sensor') {
-      const sub = parts[4];
-      if (sub === 'wind') this.engine.ingestWind(id, Number(payload.v ?? 0));
-      else if (sub === 'motion') this.engine.ingestMotion(id, Number(payload.mag ?? 0));
-      else if (sub === 'presence') this.engine.ingestPresence(id, Boolean(payload.present));
+    if (t.kind === 'status') {
+      this.engine.ingestStatus(t.id, parseStatus(payload));
+    } else if (t.kind === 'sensor') {
+      if (t.sensor === 'wind') this.engine.ingestWind(t.id, Number(payload.v ?? 0));
+      else if (t.sensor === 'motion') this.engine.ingestMotion(t.id, Number(payload.mag ?? 0));
+      else if (t.sensor === 'presence') this.engine.ingestPresence(t.id, Boolean(payload.present));
     }
   }
 
@@ -229,16 +213,13 @@ export class MqttTransport extends BaseTransport {
     if (!this.client?.connected) return;
     // include the LED tint so scene-aware firmware can react without a table
     const scene = getScene(key);
-    this.client.publish(
-      'wingbeat/global/scene',
-      JSON.stringify({ scene: key, fade_ms: 2500, led: scene.led }),
-      { qos: 1, retain: true },
-    );
+    const wire: SceneWire = { scene: key, fade_ms: 2500, led: scene.led };
+    this.client.publish(topics.globalScene, JSON.stringify(wire), { qos: QOS.scene, retain: true });
   }
 
-  /** Operator-panel maintenance broadcast (reset / calibrate / rainbow). */
-  publishGlobalCmd(action: 'reset' | 'calibrate' | 'rainbow') {
+  /** Operator-panel maintenance broadcast (reset / calibrate / rainbow / silence). */
+  publishGlobalCmd(action: GlobalAction) {
     if (!this.client?.connected) return;
-    this.client.publish('wingbeat/global/cmd/all', JSON.stringify({ action }), { qos: 1 });
+    this.client.publish(topics.globalAll, JSON.stringify({ action }), { qos: QOS.all });
   }
 }

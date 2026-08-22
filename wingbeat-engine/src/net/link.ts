@@ -27,18 +27,127 @@ export type Control =
 
 export type LinkStatus = 'idle' | 'connecting' | 'ready' | 'peer' | 'error';
 
-// STUN finds your public address; TURN relays traffic when a direct path is
-// blocked (cellular / AP-isolated WiFi). The openrelay project is a free public
-// TURN — fine for this, swap for your own for production reliability.
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-];
+/** Runtime validation of a frame from a phone. Phones run whatever build
+ *  they last loaded, so a stale or hand-rolled client must not be able to
+ *  NaN the transport or inject an unknown verb. Returns null for junk. */
+export function parseControl(raw: unknown): Control | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const num01 = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : null);
+  switch (r.t) {
+    case 'hello':
+      return { t: 'hello', ...(typeof r.name === 'string' ? { name: r.name.slice(0, 40) } : {}) };
+    case 'motion':
+    case 'blow': {
+      const v = num01(r.v);
+      return v === null ? null : { t: r.t, v };
+    }
+    case 'scene':
+      return typeof r.key === 'string' && /^[a-z0-9_]{1,40}$/.test(r.key) ? { t: 'scene', key: r.key } : null;
+    case 'bpm':
+      return typeof r.v === 'number' && Number.isFinite(r.v) ? { t: 'bpm', v: Math.max(40, Math.min(220, Math.round(r.v))) } : null;
+    case 'master': {
+      const v = num01(r.v);
+      return v === null ? null : { t: 'master', v };
+    }
+    default:
+      return null;
+  }
+}
 
-const peerOptions = () => ({ debug: 2 as const, config: { iceServers: ICE_SERVERS } });
+// ---- Network configuration (signalling + ICE) -------------------------------
+//
+// Defaults are the free public services (PeerJS cloud + openrelay TURN), which
+// is fine for a demo and a single point of failure for a show. A venue kit
+// runs its own PeerJS server on the console laptop and, if phones are on
+// cellular, its own TURN — configured here via Vite env (build time) or
+// localStorage `wb.net.v1` (runtime, from the console's Settings). Both
+// phones and console must agree, so the QR link carries nothing: the phone
+// reads the same env build. See docs/VENUE_KIT.md.
+
+export interface NetConfig {
+  /** PeerJS signalling server — empty host = the free PeerJS cloud */
+  peerHost: string;
+  peerPort: number;
+  peerPath: string;
+  peerSecure: boolean;
+  peerKey: string;
+  stunUrls: string[];
+  turnUrls: string[];
+  turnUser: string;
+  turnCred: string;
+}
+
+const NET_KEY = 'wb.net.v1';
+const env = ((import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {}) as Record<string, string | undefined>;
+
+const DEFAULT_NET: NetConfig = {
+  peerHost: env.VITE_PEER_HOST ?? '',
+  peerPort: Number(env.VITE_PEER_PORT ?? 443) || 443,
+  peerPath: env.VITE_PEER_PATH ?? '/',
+  peerSecure: (env.VITE_PEER_SECURE ?? 'true') !== 'false',
+  peerKey: env.VITE_PEER_KEY ?? 'peerjs',
+  stunUrls: (env.VITE_STUN_URLS ?? 'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302').split(',').map((u) => u.trim()).filter(Boolean),
+  turnUrls: (env.VITE_TURN_URLS ?? 'turn:openrelay.metered.ca:80,turn:openrelay.metered.ca:443,turn:openrelay.metered.ca:443?transport=tcp').split(',').map((u) => u.trim()).filter(Boolean),
+  turnUser: env.VITE_TURN_USER ?? 'openrelayproject',
+  turnCred: env.VITE_TURN_CRED ?? 'openrelayproject',
+};
+
+function validateNet(raw: unknown): NetConfig {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const strs = (v: unknown, fb: string[]) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string' && x.length > 0) : fb);
+  return {
+    peerHost: typeof r.peerHost === 'string' ? r.peerHost.trim() : DEFAULT_NET.peerHost,
+    peerPort: typeof r.peerPort === 'number' && r.peerPort > 0 && r.peerPort < 65536 ? Math.round(r.peerPort) : DEFAULT_NET.peerPort,
+    peerPath: typeof r.peerPath === 'string' && r.peerPath.startsWith('/') ? r.peerPath : DEFAULT_NET.peerPath,
+    peerSecure: typeof r.peerSecure === 'boolean' ? r.peerSecure : DEFAULT_NET.peerSecure,
+    peerKey: typeof r.peerKey === 'string' && r.peerKey ? r.peerKey : DEFAULT_NET.peerKey,
+    stunUrls: strs(r.stunUrls, DEFAULT_NET.stunUrls),
+    turnUrls: strs(r.turnUrls, DEFAULT_NET.turnUrls),
+    turnUser: typeof r.turnUser === 'string' ? r.turnUser : DEFAULT_NET.turnUser,
+    turnCred: typeof r.turnCred === 'string' ? r.turnCred : DEFAULT_NET.turnCred,
+  };
+}
+
+export function getNetConfig(): NetConfig {
+  try {
+    const raw = localStorage.getItem(NET_KEY);
+    return validateNet(raw ? JSON.parse(raw) : undefined);
+  } catch {
+    return { ...DEFAULT_NET };
+  }
+}
+
+/** Persist a runtime override (venue kit). Pass null to go back to env/defaults. */
+export function setNetConfig(cfg: Partial<NetConfig> | null): NetConfig {
+  try {
+    if (!cfg) localStorage.removeItem(NET_KEY);
+    else localStorage.setItem(NET_KEY, JSON.stringify(validateNet({ ...getNetConfig(), ...cfg })));
+  } catch { /* private mode */ }
+  return getNetConfig();
+}
+
+export function isUsingFreeInfra(cfg = getNetConfig()): { signalling: boolean; turn: boolean } {
+  return {
+    signalling: !cfg.peerHost,
+    turn: cfg.turnUrls.some((u) => u.includes('openrelay.metered.ca')),
+  };
+}
+
+function iceServers(cfg: NetConfig): RTCIceServer[] {
+  const out: RTCIceServer[] = cfg.stunUrls.map((urls) => ({ urls }));
+  for (const urls of cfg.turnUrls) out.push({ urls, username: cfg.turnUser, credential: cfg.turnCred });
+  return out;
+}
+
+const peerOptions = () => {
+  const cfg = getNetConfig();
+  return {
+    debug: 2 as const,
+    config: { iceServers: iceServers(cfg) },
+    ...(cfg.peerHost ? { host: cfg.peerHost, port: cfg.peerPort, path: cfg.peerPath, secure: cfg.peerSecure, key: cfg.peerKey } : {}),
+  };
+};
 
 type Log = (msg: string) => void;
 const noop: Log = () => {};
@@ -118,12 +227,13 @@ export function startHost(opts: {
         report();
       });
       conn.on('data', (d) => {
+        const c = parseControl(d);
+        if (!c) return; // malformed / unknown verb — drop, never crash the host
+        if (c.t === 'hello') log(`hello from ${conn.peer}`);
         try {
-          const c = d as Control;
-          if (c.t === 'hello') log(`hello from ${conn.peer}`);
           opts.onControl(c);
-        } catch {
-          /* ignore malformed frame */
+        } catch (err) {
+          console.warn('[link] control handler failed', err);
         }
       });
       const drop = (why: string) => {

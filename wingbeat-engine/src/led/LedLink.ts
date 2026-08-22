@@ -18,6 +18,7 @@
 import mqtt, { type MqttClient } from 'mqtt';
 import type { LedCommand, NodeId, NodeRole } from '../engine/types.ts';
 import type { LedSource, LedWire } from './types.ts';
+import { QOS, parseJson, parseLedCmd, parseStatus, parseTopic, topics } from '../protocol/wire.ts';
 
 export type LinkStatus = 'idle' | 'connecting' | 'connected' | 'error' | 'closed';
 
@@ -122,8 +123,8 @@ export class LedLink {
       // nodes announce themselves here; the firmware publishes this retained
       // with an LWT of {"online":false}, so we learn about a node the moment
       // we subscribe and again the moment it dies
-      client.subscribe('wingbeat/node/+/status', { qos: 1 });
-      client.subscribe('wingbeat/node/+/cmd/led', { qos: 0 });
+      client.subscribe(topics.anyStatus, { qos: QOS.status });
+      client.subscribe(topics.anyCmdLed, { qos: QOS.cmdStream });
     });
     client.on('reconnect', () => this.setStatus('connecting'));
     client.on('error', () => this.setStatus('error'));
@@ -134,31 +135,26 @@ export class LedLink {
   }
 
   private onMessage(topic: string, msg: Uint8Array) {
-    const parts = topic.split('/');
-    if (parts[0] !== 'wingbeat') return;
-    if (parts.length === 5 && parts[3] === 'cmd' && parts[4] === 'led') {
-      try {
-        const cmd = JSON.parse(new TextDecoder().decode(msg)) as LedWire;
-        for (const cb of this.ledCbs) cb(parts[2], cmd);
-      } catch { /* a partial payload is not worth reporting */ }
+    const t = parseTopic(topic);
+    if (!t) return;
+    const body = parseJson(msg);
+    if (!body) return; // a node mid-flash can emit a partial payload; ignore it
+    if (t.kind === 'cmd') {
+      if (t.cmd !== 'led') return;
+      const cmd = parseLedCmd(body);
+      if (cmd) for (const cb of this.ledCbs) cb(t.id, cmd);
       return;
     }
-    if (parts.length !== 4 || parts[3] !== 'status') return;
-    const id = parts[2];
-    let body: Record<string, unknown> = {};
-    try {
-      body = JSON.parse(new TextDecoder().decode(msg)) as Record<string, unknown>;
-    } catch {
-      return; // a node mid-flash can emit a partial payload; ignore it
-    }
-    const prev = this.nodes.get(id);
-    this.nodes.set(id, {
-      id,
-      role: (body.role as NodeRole) ?? prev?.role,
-      online: body.online !== false,
-      rssi: typeof body.rssi === 'number' ? body.rssi : prev?.rssi,
-      ip: typeof body.ip === 'string' ? body.ip : prev?.ip,
-      fw: typeof body.fw === 'string' ? body.fw : prev?.fw,
+    if (t.kind !== 'status') return;
+    const st = parseStatus(body);
+    const prev = this.nodes.get(t.id);
+    this.nodes.set(t.id, {
+      id: t.id,
+      role: st.role ?? prev?.role,
+      online: st.online,
+      rssi: st.rssi ?? prev?.rssi,
+      ip: st.ip ?? prev?.ip,
+      fw: st.fw ?? prev?.fw,
       lastSeen: performance.now(),
     });
     this.emitNodes();
@@ -173,10 +169,7 @@ export class LedLink {
       return false;
     }
     const wire: LedWire = { ...cmd, src };
-    this.client.publish(`wingbeat/node/${id}/cmd/led`, JSON.stringify(wire), {
-      qos: 0,
-      retain: false,
-    });
+    this.client.publish(topics.cmdLed(id), JSON.stringify(wire), { qos: QOS.cmdStream, retain: false });
     this._sent++;
     return true;
   }

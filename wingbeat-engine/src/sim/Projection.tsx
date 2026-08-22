@@ -47,8 +47,7 @@ import {
   MAX_LAYERS,
   DEFAULT_GLOBAL,
   audioRouteTargets,
-  type LayerDef,
-} from './rig.ts';
+  type LayerDef, notifyLayersChange } from './rig.ts';
 import { recallLast, saveLast } from './presets.ts';
 import type { WingbeatEngine } from '../engine/WingbeatEngine.ts';
 import type { AudioEngine } from '../engine/AudioEngine.ts';
@@ -217,7 +216,16 @@ function buildFeather(): Built {
   return { group, yV, pV, wL, wR, yD, pD, vaneL, vaneR, rachis, barbs, downy, calamus, mats };
 }
 
-function ProceduralFeather({ engine }: { engine: WingbeatEngine }) {
+function ProceduralFeather({ engine, featherId }: { engine: WingbeatEngine; featherId: string }) {
+  // The image feathers do this in their onload; the procedural one has no
+  // image, so without this its rig never recalled and its autosave landed in
+  // whichever image feather was open before it.
+  useEffect(() => {
+    if (rig.feather && rig.feather !== featherId) saveLast(rig.feather);
+    if (!recallLast(featherId)) loadIntoRig(defaultPreset(featherId));
+    rig.feather = featherId;
+    notifyLayersChange();
+  }, [featherId]);
   const built = useMemo(buildFeather, []);
   const driveRef = useRef(0);
   const bloomRef = useRef(0); // 0 = single rachis line, 1 = full feather form
@@ -1126,7 +1134,7 @@ export const Projection = memo(function Projection({
         zoomSpeed={0.9}
       />
       {item.procedural ? (
-        <ProceduralFeather engine={engine} />
+        <ProceduralFeather engine={engine} featherId={item.id} />
       ) : (
         <ImageFeather engine={engine} audio={audio} src={item.src} featherId={item.id} key={item.src} />
       )}

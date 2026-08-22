@@ -282,20 +282,23 @@ export function setLayerRelease(i: number, v: number) {
 
 export const rig: FeatherPreset = defaultPreset('procedural');
 
-export function loadIntoRig(preset: FeatherPreset) {
+export function loadIntoRig(raw: FeatherPreset) {
+  // Validate on the way in, whatever the source: a preset from an older
+  // version, a hand-edited JSON or a cloud push can't leave the rig malformed.
+  const preset = validatePreset(raw, rig.feather);
   rig.name = preset.name;
   rig.feather = preset.feather;
-  rig.autoK = preset.autoK ?? 4;
-  rig.customLayers = preset.customLayers ? JSON.parse(JSON.stringify(preset.customLayers)) : [];
-  rig.layerSounds = preset.layerSounds ? JSON.parse(JSON.stringify(preset.layerSounds)) : [];
-  rig.layerGen = preset.layerGen ? [...preset.layerGen] : [];
-  rig.layerRel = preset.layerRel ? [...preset.layerRel] : [];
-  rig.autoColors = preset.autoColors ? preset.autoColors.map((c) => (c ? [c[0], c[1], c[2]] : null)) : [];
-  rig.global = { ...DEFAULT_GLOBAL, ...preset.global };
-  rig.sensors = {};
-  for (const c of SENSOR_CHANNELS) rig.sensors[c.sensor] = { ...defaultSensorRig(c.sensor), ...preset.sensors?.[c.sensor] };
-  rig.audioRoutes = preset.audioRoutes ? JSON.parse(JSON.stringify(preset.audioRoutes)) : undefined;
+  rig.autoK = preset.autoK;
+  rig.customLayers = preset.customLayers;
+  rig.layerSounds = preset.layerSounds;
+  rig.layerGen = preset.layerGen;
+  rig.layerRel = preset.layerRel;
+  rig.autoColors = preset.autoColors;
+  rig.global = preset.global;
+  rig.sensors = preset.sensors;
+  rig.audioRoutes = preset.audioRoutes;
   rig.updatedAt = preset.updatedAt;
+  notifyRigChange();
 }
 
 export function snapshotPreset(name?: string): FeatherPreset {
@@ -333,6 +336,118 @@ export function onLayersChange(cb: () => void): () => void {
 }
 export function notifyLayersChange() {
   layerListeners.forEach((cb) => cb());
+  notifyRigChange(); // a layer edit is a rig edit too
+}
+
+// ---- rig-change pubsub (any value) -------------------------------------------
+// `rig` is a mutable singleton by design (the shader reads it every frame with
+// zero indirection). What it lacked was a way for the UI to learn that someone
+// else changed it. Mutate, then notify; panels subscribe via useRigTick().
+const rigListeners = new Set<() => void>();
+export function onRigChange(cb: () => void): () => void {
+  rigListeners.add(cb);
+  return () => rigListeners.delete(cb);
+}
+export function notifyRigChange() {
+  rigListeners.forEach((cb) => {
+    try { cb(); } catch (err) { console.warn('[rig] listener failed', err); }
+  });
+}
+
+// ---- validation --------------------------------------------------------------
+// Presets arrive from localStorage, JSON files and the cloud — all of which
+// can be stale, hand-edited or from a different version. Every number is
+// clamped to its sane range and every missing field gets its default, so a
+// blind load can't NaN the shader or leave a sensor with no modules object.
+const fin = (v: unknown, fb: number, lo: number, hi: number) =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : fb;
+const rgb3 = (v: unknown, fb: [number, number, number]): [number, number, number] =>
+  Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x))
+    ? [Math.min(1, Math.max(0, v[0])), Math.min(1, Math.max(0, v[1])), Math.min(1, Math.max(0, v[2]))]
+    : fb;
+
+export function validateGlobal(raw: unknown): GlobalRig {
+  const g = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const D = DEFAULT_GLOBAL;
+  return {
+    sway: fin(g.sway, D.sway, 0, 1), disperse: fin(g.disperse, D.disperse, 0, 1), audioReact: fin(g.audioReact, D.audioReact, 0, 2),
+    size: fin(g.size, D.size, 1, 200), stability: fin(g.stability, D.stability, 0, 1), attack: fin(g.attack, D.attack, 0.001, 1),
+    release: fin(g.release, D.release, 0.001, 1), amount: fin(g.amount, D.amount, 0, 1), bpm: fin(g.bpm, D.bpm, 40, 220),
+    gravity: fin(g.gravity, D.gravity, 0, 1), hold: fin(g.hold, D.hold, 0, 1), pulseColor: rgb3(g.pulseColor, D.pulseColor),
+    motion: fin(g.motion, D.motion, 0, 2), ambient: fin(g.ambient, D.ambient, 0, 1), floatTime: fin(g.floatTime, D.floatTime, 0, 20),
+    relief: fin(g.relief, D.relief, 0, 2), wingBeat: fin(g.wingBeat, D.wingBeat, 0, 2), audioColor: fin(g.audioColor, D.audioColor, 0, 2),
+    autoAudio: typeof g.autoAudio === 'boolean' ? g.autoAudio : D.autoAudio, idleFall: fin(g.idleFall, D.idleFall, 0, 600),
+  };
+}
+
+export function validateSensor(sensorId: string, raw: unknown): SensorRig {
+  const d = defaultSensorRig(sensorId);
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const mods = (r.modules && typeof r.modules === 'object' ? r.modules : {}) as Record<string, unknown>;
+  const modules = { ...d.modules };
+  for (const m of MODULE_TYPES) if (typeof mods[m] === 'boolean') modules[m] = mods[m] as boolean;
+  const layers = Array.isArray(r.layers) ? r.layers.filter((x): x is number => typeof x === 'number' && x >= 0 && x < MAX_LAYERS) : d.layers;
+  const range = Array.isArray(r.audioBandRange) && r.audioBandRange.length === 2 && r.audioBandRange.every((x: unknown) => typeof x === 'number' && Number.isFinite(x))
+    ? ([Math.max(0, r.audioBandRange[0]), Math.max(0, r.audioBandRange[1])] as [number, number]) : undefined;
+  return {
+    modules,
+    motionType: MOTION_TYPES.includes(r.motionType as MotionType) ? (r.motionType as MotionType) : d.motionType,
+    audioBand: AUDIO_BANDS.includes(r.audioBand as AudioBand) ? (r.audioBand as AudioBand) : d.audioBand,
+    ...(range ? { audioBandRange: range } : {}),
+    eqOn: typeof r.eqOn === 'boolean' ? r.eqOn : d.eqOn,
+    reach: fin(r.reach, d.reach, 0, 2), reachLink: typeof r.reachLink === 'boolean' ? r.reachLink : d.reachLink,
+    reachMin: fin(r.reachMin, d.reachMin ?? 0, 0, 2), reachMax: fin(r.reachMax, d.reachMax ?? 1, 0, 2),
+    reachAttack: fin(r.reachAttack, d.reachAttack ?? 0.05, 0, 10), reachRelease: fin(r.reachRelease, d.reachRelease ?? 0.25, 0, 10),
+    swirl: fin(r.swirl, d.swirl, 0, 2), lift: fin(r.lift, d.lift, 0, 2), maxDist: fin(r.maxDist, d.maxDist, 0, 5),
+    attack: fin(r.attack, d.attack, 0.001, 1), release: fin(r.release, d.release, 0.001, 1),
+    colorOverride: typeof r.colorOverride === 'boolean' ? r.colorOverride : d.colorOverride,
+    overrideRGB: rgb3(r.overrideRGB, d.overrideRGB),
+    layers,
+    ...(typeof r.loopSample === 'string' ? { loopSample: r.loopSample } : {}),
+    sensitivity: fin(r.sensitivity, d.sensitivity ?? 1, 0.2, 3),
+  };
+}
+
+/** Coerce anything into a well-formed FeatherPreset (never throws). */
+export function validatePreset(raw: unknown, fallbackFeather = 'procedural'): FeatherPreset {
+  const p = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const feather = typeof p.feather === 'string' && p.feather ? p.feather : fallbackFeather;
+  const sensors: Record<string, SensorRig> = {};
+  const ps = (p.sensors && typeof p.sensors === 'object' ? p.sensors : {}) as Record<string, unknown>;
+  for (const c of SENSOR_CHANNELS) sensors[c.sensor] = validateSensor(c.sensor, ps[c.sensor]);
+  const numArr = (v: unknown, lo: number, hi: number) => (Array.isArray(v) ? v.map((x) => fin(x, lo, lo, hi)) : []);
+  const layerSounds: LayerSound[] = Array.isArray(p.layerSounds)
+    ? p.layerSounds.map((ls) => {
+        const o = (ls && typeof ls === 'object' ? ls : {}) as Record<string, unknown>;
+        const mode: LayerSoundMode = o.mode === 'sample' || o.mode === 'pattern' ? o.mode : 'synth';
+        return { mode, ...(typeof o.sampleName === 'string' ? { sampleName: o.sampleName } : {}), ...(typeof o.seed === 'number' ? { seed: o.seed } : {}) };
+      })
+    : [];
+  const customLayers: LayerDef[] = Array.isArray(p.customLayers)
+    ? p.customLayers.filter((L) => L && typeof L === 'object' && (L.kind === 'color' || L.kind === 'area' || L.kind === 'auto')).map((L) => ({
+        kind: L.kind as LayerKind, label: typeof L.label === 'string' ? L.label : L.kind,
+        ...(L.rgb ? { rgb: rgb3(L.rgb, [1, 1, 1]) } : {}), ...(typeof L.tol === 'number' ? { tol: fin(L.tol, 0.2, 0, 1) } : {}),
+        ...(typeof L.yMin === 'number' ? { yMin: fin(L.yMin, 0, 0, 1) } : {}), ...(typeof L.yMax === 'number' ? { yMax: fin(L.yMax, 1, 0, 1) } : {}),
+      }))
+    : [];
+  const autoColors = Array.isArray(p.autoColors) ? p.autoColors.map((c) => (c ? rgb3(c, [1, 1, 1]) : null)) : [];
+  const routes: Record<string, string[]> | undefined = p.audioRoutes && typeof p.audioRoutes === 'object'
+    ? Object.fromEntries(Object.entries(p.audioRoutes as Record<string, unknown>).filter(([, v]) => Array.isArray(v)).map(([k, v]) => [k, (v as unknown[]).filter((x): x is string => typeof x === 'string')]))
+    : undefined;
+  return {
+    name: typeof p.name === 'string' ? p.name : 'preset',
+    feather,
+    autoK: Math.round(fin(p.autoK, 5, 1, MAX_LAYERS)),
+    customLayers,
+    layerSounds,
+    layerGen: numArr(p.layerGen, 0.01, 1),
+    layerRel: numArr(p.layerRel, 0.01, 1),
+    autoColors,
+    global: validateGlobal(p.global),
+    sensors,
+    ...(routes ? { audioRoutes: routes } : {}),
+    ...(typeof p.updatedAt === 'number' ? { updatedAt: p.updatedAt } : {}),
+  };
 }
 
 // ---- Shader uniform packing (per-sensor) -----------------------------------

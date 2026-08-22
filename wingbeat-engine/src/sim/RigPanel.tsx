@@ -5,6 +5,7 @@
 // ============================================================================
 
 import { useRef, useState } from 'react';
+import { useRigTick } from './useRig.ts';
 import { SENSOR_CHANNELS } from './channels.ts';
 import {
   rig,
@@ -28,7 +29,7 @@ import {
   type SensorRig,
   type LayerDef,
 } from './rig.ts';
-import { listPresets, savePreset, recallPreset, deletePreset, exportPreset, importPreset, saveLast } from './presets.ts';
+import { listPresets, savePreset, recallPreset, deletePreset, exportPreset, importPreset, saveLast, presetExists, type PresetBundle, type PresetContext } from './presets.ts';
 import type { AudioEngine } from '../engine/AudioEngine.ts';
 import type { EngineSnapshot } from './useEngine.ts';
 
@@ -55,14 +56,21 @@ function Slider({ label, value, min, max, step, onChange }: { label: string; val
   );
 }
 
-export function RigPanel({ snapshot, audio, onClose }: { snapshot: EngineSnapshot; audio: AudioEngine; onClose: () => void }) {
+export function RigPanel({ snapshot, audio, onClose, presetContext, onPresetRecall }: {
+  snapshot: EngineSnapshot;
+  audio: AudioEngine;
+  onClose: () => void;
+  /** What to bundle with the rig on save/export (scene, routing, mixer, samples). */
+  presetContext?: () => PresetContext;
+  /** Apply the non-rig parts of a recalled / imported bundle. */
+  onPresetRecall?: (b: PresetBundle) => void;
+}) {
   const feather = snapshot.feather;
   const palette = snapshot.featherPalette;
   const counts = snapshot.featherLayerCounts;
   const total = Math.max(1, counts.reduce((a, b) => a + b, 0));
   const layers = combinedLayers(palette);
-  const [, setTick] = useState(0);
-  const rr = () => setTick((v) => v + 1);
+  const rr = useRigTick();
   const relayout = () => { notifyLayersChange(); rr(); };
   const [presetName, setPresetName] = useState(rig.name);
   const [presets, setPresets] = useState<string[]>(() => listPresets());
@@ -82,20 +90,20 @@ export function RigPanel({ snapshot, audio, onClose }: { snapshot: EngineSnapsho
       {/* PRESETS — portable: a preset saved here can be recalled on ANY feather */}
       <div className="wb-settings-section">Presets · profiles (work on any feather)</div>
       <div className="wb-set-row">
-        <select value="" onChange={(e) => { if (e.target.value && recallPreset(e.target.value)) { setPresetName(e.target.value); saveLast(feather); relayout(); } }}>
+        <select value="" onChange={(e) => { const b = e.target.value ? recallPreset(e.target.value) : null; if (b) { setPresetName(b.name); saveLast(feather); relayout(); onPresetRecall?.(b); } }}>
           <option value="">recall profile…</option>
           {presets.map((p) => <option key={p} value={p}>{p}</option>)}
         </select>
       </div>
       <div className="wb-set-row">
         <input className="wb-input" style={{ width: 110 }} value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="profile name" />
-        <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => { const n = presetName.trim() || 'preset'; savePreset(n); saveLast(feather); refresh(); }}>save</button>
-        <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => { deletePreset(presetName); refresh(); }}>del</button>
+        <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => { const n = presetName.trim() || 'preset'; if (presetExists(n) && !confirm(`Overwrite preset "${n}"?`)) return; savePreset(n, presetContext?.()); saveLast(feather); refresh(); }}>save</button>
+        <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => { if (!presetExists(presetName)) return; if (!confirm(`Delete preset "${presetName}"?`)) return; deletePreset(presetName); refresh(); }}>del</button>
       </div>
       <div className="wb-set-row">
-        <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => exportPreset(presetName || 'preset')}>export json</button>
+        <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => exportPreset(presetName || 'preset', presetContext?.())}>export json</button>
         <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => fileRef.current?.click()}>import</button>
-        <input ref={fileRef} type="file" accept="application/json" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) importPreset(f).then(() => { setPresetName(rig.name); refresh(); relayout(); }).catch((err) => alert(err?.message || 'Could not import that file.')); }} />
+        <input ref={fileRef} type="file" accept="application/json" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) importPreset(f).then((b) => { setPresetName(b.name); refresh(); relayout(); onPresetRecall?.(b); }).catch((err) => alert(err?.message || 'Could not import that file.')); }} />
       </div>
 
       {/* IMAGE ANALYSIS */}

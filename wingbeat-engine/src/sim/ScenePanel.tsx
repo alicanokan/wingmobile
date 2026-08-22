@@ -9,6 +9,7 @@
 // ============================================================================
 
 import { useRef, useState } from 'react';
+import { useRigTick } from './useRig.ts';
 import { SCENES } from '../engine/scenes.ts';
 import { SENSOR_CHANNELS } from './channels.ts';
 import { rig, layerSound, notifyLayersChange, type LayerSoundMode } from './rig.ts';
@@ -35,8 +36,7 @@ export function ScenePanel({ snapshot, engine, audio, onClose }: Props) {
   const total = Math.max(1, counts.reduce((a, b) => a + b, 0));
   const sceneKey = sceneForFeather(feather);
 
-  const [, setTick] = useState(0);
-  const rr = () => setTick((v) => v + 1);
+  const rr = useRigTick();
   const loopRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const pickScene = (key: string) => {

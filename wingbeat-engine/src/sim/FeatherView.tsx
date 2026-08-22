@@ -81,7 +81,7 @@ export default function FeatherView() {
         }
         if (s.palette?.length) engine.setFeatherPalette(s.palette);
         if (s.audio) audio.setRemoteLevels(s.audio);
-        setFeather((f) => (f !== s.feather ? s.feather : f));
+        if (s.feather) setFeather((f) => (f !== s.feather ? s.feather : f));
       } else if (m.kind === 'rig') {
         loadIntoRig(m.preset);
         // only rebuild the particle cloud when the LAYER config actually changes

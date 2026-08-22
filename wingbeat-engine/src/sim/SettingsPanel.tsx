@@ -10,7 +10,8 @@
 //  Works before "Start audio" too — values are stored and applied on start.
 // ============================================================================
 
-import { useRef, useState } from 'react';
+import { useRef, useState , useEffect} from 'react';
+import { useRigTick } from './useRig.ts';
 import {
   AudioEngine,
   LAYER_LABELS,
@@ -22,6 +23,8 @@ import {
 import { SENSOR_CHANNELS } from './channels.ts';
 import { rig } from './rig.ts';
 import type { WingbeatEngine } from '../engine/WingbeatEngine.ts';
+import { midiOut } from '../midi/MidiOut.ts';
+import { getNetConfig, setNetConfig, isUsingFreeInfra } from '../net/link.ts';
 
 const LAYERS: LayerName[] = ['bed', 'wind', 'melody', 'perc', 'accent'];
 const SAMPLE_LAYERS: SampleLayer[] = ['melody', 'perc', 'accent'];
@@ -38,9 +41,12 @@ interface Props {
 }
 
 export function SettingsPanel({ audio, engine, audioReady, masterGain, onMaster, onClose }: Props) {
-  const [, setTick] = useState(0);
-  const rerender = () => setTick((v) => v + 1);
+  const rerender = useRigTick();
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  useEffect(() => midiOut.onChange(rerender), [rerender]);
+  const net = getNetConfig();
+  const free = isUsingFreeInfra(net);
+  const setNet = (patch: Parameters<typeof setNetConfig>[0]) => { setNetConfig(patch); rerender(); };
 
   return (
     <div className="wb-settings">
@@ -278,6 +284,60 @@ export function SettingsPanel({ audio, engine, audioReady, masterGain, onMaster,
           </div>
         );
       })}
+
+      <div className="wb-settings-section">MIDI out — drive external gear</div>
+      <div className="wb-settings-note">
+        melody → ch 1 · percussion → ch 10 · accent → ch 2 · room wind → CC 1 · each sensor → CC 20+ · scene → program change.
+        {!midiOut.supported && ' This browser has no Web MIDI (use Chrome / Edge).'}
+      </div>
+      <div className="wb-set-row">
+        <label>Enable</label>
+        <input type="checkbox" checked={midiOut.state.enabled} disabled={!midiOut.supported} onChange={(e) => midiOut.setEnabled(e.target.checked)} />
+        <span className="wb-motion-val">
+          {midiOut.status === 'ready' ? (midiOut.active ? 'sending' : 'no output chosen') : midiOut.status}
+        </span>
+      </div>
+      <div className="wb-set-row">
+        <label>Output</label>
+        <select value={midiOut.state.outputId} disabled={!midiOut.outputs.length} onChange={(e) => midiOut.selectOutput(e.target.value)}>
+          {midiOut.outputs.length ? midiOut.outputs.map((o) => <option key={o.id} value={o.id}>{o.name}</option>) : <option value="">— none found —</option>}
+        </select>
+        {midiOut.supported && midiOut.status !== 'ready' && (
+          <button className="wb-btn" style={{ padding: '3px 8px' }} onClick={() => void midiOut.request()}>scan</button>
+        )}
+      </div>
+
+      <div className="wb-settings-section">Network — phones (venue kit)</div>
+      <div className="wb-settings-note">
+        {free.signalling ? '⚠ Signalling via the free PeerJS cloud' : `Signalling via ${net.peerHost}:${net.peerPort}`}
+        {' · '}
+        {free.turn ? '⚠ TURN via the public openrelay' : 'TURN: own server'}
+        {' — phones must be built with the same values (docs/VENUE_KIT.md).'}
+      </div>
+      <div className="wb-set-row">
+        <label>PeerJS host</label>
+        <input className="wb-input" value={net.peerHost} placeholder="empty = free cloud" onChange={(e) => setNet({ peerHost: e.target.value })} />
+        <input className="wb-input" style={{ width: 70 }} type="number" value={net.peerPort} onChange={(e) => setNet({ peerPort: Number(e.target.value) })} />
+      </div>
+      <div className="wb-set-row">
+        <label>Path / key</label>
+        <input className="wb-input" style={{ width: 90 }} value={net.peerPath} onChange={(e) => setNet({ peerPath: e.target.value })} />
+        <input className="wb-input" style={{ width: 110 }} value={net.peerKey} onChange={(e) => setNet({ peerKey: e.target.value })} />
+        <label style={{ marginLeft: 8 }}>
+          <input type="checkbox" checked={net.peerSecure} onChange={(e) => setNet({ peerSecure: e.target.checked })} /> https
+        </label>
+      </div>
+      <div className="wb-set-row">
+        <label>TURN urls</label>
+        <input className="wb-input" value={net.turnUrls.join(',')} placeholder="turn:host:3478,turn:host:443?transport=tcp" onChange={(e) => setNet({ turnUrls: e.target.value.split(',').map((u) => u.trim()).filter(Boolean) })} />
+      </div>
+      <div className="wb-set-row">
+        <label>TURN user / cred</label>
+        <input className="wb-input" style={{ width: 110 }} value={net.turnUser} onChange={(e) => setNet({ turnUser: e.target.value })} />
+        <input className="wb-input" style={{ width: 130 }} type="password" value={net.turnCred} onChange={(e) => setNet({ turnCred: e.target.value })} />
+        <button className="wb-btn" style={{ padding: '3px 8px' }} title="back to env / free defaults" onClick={() => setNet(null)}>reset</button>
+      </div>
+      <div className="wb-settings-note">Changes apply to new phone connections (reload the console to re-register rooms).</div>
     </div>
   );
 }

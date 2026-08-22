@@ -8,7 +8,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "docs:mqtt": "node --experimental-strip-types --no-warnings scripts/gen-mqtt-doc.ts",
+    "check": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
@@ -32,6 +36,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
+    "vitest": "^4.1.11",
     "ws": "^8.21.0"
   }
 }

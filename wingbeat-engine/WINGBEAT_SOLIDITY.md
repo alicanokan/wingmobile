@@ -149,6 +149,72 @@ Typecheck + build clean; router/arbiter logic covered by a headless Node test
   (re)subscribe so a push missed while offline is caught up. A UI indicator
   for the channel state is still to do.
 
+## Changelog — 2026-08-22 (evening), Phases 2–4 shipped
+
+Typecheck, **38 Vitest tests**, production build and the MQTT-doc drift check
+all clean — and now enforced by CI on every push
+(`.github/workflows/wingbeat-engine.yml`).
+
+**Phase 2 — state solidity**
+- ✅ `rig` is an observable store (`onRigChange` / `notifyRigChange`,
+  `useRigTick()`); the four `setTick` hacks are gone, every panel re-renders on
+  any rig change. `loadIntoRig` validates (`validatePreset`: every number
+  clamped, every missing field defaulted — never throws).
+- ✅ **Preset v2** (`presets.ts`): a bundle of rig + scene + input routing +
+  mixer + cloud `SampleRef`s; v1 entries and files migrate on read; confirm
+  before overwrite / delete; recall re-applies routing, mixer, scene and
+  re-installs the loops (audio travels with the preset at last).
+- ✅ Persisted with validators: mixer/voices/loop faders (`wb.mixer.v1`, via
+  `new AudioEngine({ persist })` — preview engines don't persist), mic and
+  camera calibration (`wb.mic.v1` / `wb.cam.v1`, setters save), routing
+  already (`validateRouting` factored out). Shared helper `sim/persisted.ts`.
+- ✅ Single sources of truth: scene writes through to `featherScenes` from
+  phones and conductor pushes (pushes set the feather's scene *before* the
+  feather switch, which is why remote scenes used to revert); BPM lives in
+  `rig.global.bpm` on every page (`/experience` fixed); the procedural
+  feather recalls and autosaves its own rig (it used to write into the
+  previous image feather's slot); fullscreen swipe reads the current
+  next/prev through refs; `MicSource.active` can no longer claim a mic that
+  permission denied.
+
+**Phase 3 — network resilience**
+- ✅ `liveSync`: strictly-newer `updated_at` (server-stamped); configs
+  validated (`validateConductorConfig`, schema `v` + `origin` client id);
+  loop installs are generation-guarded (a newer push cancels the older one)
+  and download in parallel; re-read on `online` / `visibilitychange`; the
+  console shows a `☁ live / error / closed` chip (stopper #12 closed).
+- ✅ `cloud.ts`: one in-flight download per sample; `text/html` responses
+  rejected (captive portals), length verified against `size_bytes`, 20 s
+  timeout. `sampleCache` v2: meta store, 250 MB LRU cap, quota errors surfaced
+  (`cacheLastError`).
+- ✅ Runtime validation + version on everything that crosses a boundary:
+  `parseControl` (phone → console), `parseSyncMsg` (console → display),
+  `validateConductorConfig` (cloud), `parseLedCmd` / `parseStatus` (MQTT).
+- ✅ Configurable PeerJS signalling + STUN/TURN (Vite env or Settings →
+  Network, `wb.net.v1`); free cloud stays the fallback; `docs/VENUE_KIT.md`
+  documents the laptop kit (Mosquitto, PeerJS server, TURN, pre-show list).
+
+**Phase 4 — keep it solid**
+- ✅ **Wire contract** `src/protocol/wire.ts`: topic builders, parsers,
+  vocabulary, QoS table, doc entries; `MqttTransport` and `LedLink` import
+  it; `npm run docs:mqtt` regenerates `wingbeat-system/docs/mqtt-topics.md`
+  (CI fails on drift).
+- ✅ **Firmware 0.2.0** (`feather_node.ino`, reflash): `brightness` over
+  MQTT, `calibrate` action, retained presence cleared on every connect, gamma
+  on SOLID, motion flash never through OFF.
+- ✅ **Tests** (Vitest, Node env, no DOM): LedRouter ownership + gates,
+  LED arbiter, engine thresholds/cooldowns/staleness/scene guard/listener
+  isolation, preset validation + v1→v2 migration + round-trip identity,
+  routing validator, wire parsers, control/sync validators, MIDI note map.
+- ✅ **CI**: typecheck → test → build → doc-drift on push/PR touching
+  `wingbeat-engine/`.
+- ✅ **Docs**: `WINGBEAT_ENGINE.md` reconciled (routes incl. `/experience`
+  and `/feather2`, `/cam` marked parked, LED pipelines, MIDI built, OSC
+  planned).
+- ✅ **MIDI out** built (`src/midi/MidiOut.ts`, Settings → MIDI out).
+- ⏳ **OSC out**: design only — a bus consumer like MidiOut plus a
+  WebSocket→UDP bridge on the laptop. Not started (decision: future).
+
 ---
 
 ## The verdict in one paragraph
@@ -180,7 +246,7 @@ the controls and the health checks that sim mode has, and almost every failure
 | 9 | **Opening the Controllers panel erases the routing matrix.** Auto-route effect overwrites slots 1–5 with a hardcoded layout and *persists* it; re-fires on every peer update. | `App.tsx:642-690` | An afternoon of patching destroyed by opening a panel to read a pairing code. |
 | 10 | ~~**Console reload orphans every phone.**~~ **FIXED 2026-08-22** — rooms persist (`wb.devices.v1`), host reconnects signalling, phones re-dial with backoff + jitter. | `sim/App.tsx`, `net/link.ts` | Was: one refresh = re-pair five phones mid-show. |
 | 11 | ~~**`/feather` projection has zero audio reactivity.**~~ **FIXED 2026-08-22** — the console mirrors live levels over the sync channel; the display's AudioEngine reads them. | `sim/FeatherView.tsx`, `engine/AudioEngine.ts`, `sim/sync.ts` | Was: the audience-facing projection didn't react to sound. |
-| 12 | **"Pushed live ✓" can be a lie.** PARTLY FIXED 2026-08-22 — downloads time out (20 s), realtime channel reports its state + re-reads on resubscribe. Still missing: a visible channel-state indicator and per-device ack. | `net/cloud.ts`, `net/liveSync.ts` | Conductor can still see success while a device silently never subscribed — but the device now logs it and catches up on reconnect. |
+| 12 | ~~**"Pushed live ✓" can be a lie.**~~ **FIXED 2026-08-22** — downloads time out + verify, realtime channel status shown as a `☁` chip on the console, re-read on resubscribe/online/visible, generation-guarded installs. Remaining idea: per-device ack table (Phase 5). | `net/cloud.ts`, `net/liveSync.ts`, `sim/App.tsx` | Was: conductor saw success while devices silently missed the push. |
 | 13 | ~~**Anyone can take over the installation.**~~ **FIXED 2026-08-22** — writes go through secret-gated SECURITY DEFINER RPCs; public role is read-only (migrations `wingbeat_secret_gated_writes` + `wingbeat_lockdown_public_writes`). Verified live. | `net/cloud.ts`, `supabase/` | Was: any visitor to wingbeat.art could push their config to every device in the venue. Now: needs the conductor secret. |
 | 14 | **The `/cam` phone-camera feature is entirely dead.** Relay is a Vite-dev-only plugin (404s on Vercel), nothing consumes it (no `'net'` source in `inputs.ts`), and its only UI (`PhonePanel`) is orphaned. | `vite.config.ts:11-40`, `sim/camNet.ts`, `sim/PhonePanel.tsx` | Docs promise a feature that has never been wired; stage time burned debugging it. |
 

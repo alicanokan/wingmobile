@@ -15,6 +15,7 @@
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRigTick } from './useRig.ts';
 import './ui.css';
 import './experience.css';
 import QRCode from 'qrcode';
@@ -43,8 +44,7 @@ export default function Experience() {
   const [audioReady, setAudioReady] = useState(false);
   const [masterGain, setMasterGain] = useState(0.7);
   const [sheet, setSheet] = useState<Sheet>(null);
-  const [, setTick] = useState(0); // mixer rerender
-  const rerender = () => setTick((v) => v + 1);
+  const rerender = useRigTick(); // mixer + rig rerender
 
   const chooseFeather = (id: string) => {
     setFeather(id);
@@ -130,9 +130,14 @@ export default function Experience() {
             case 'scene':
               engine.setScene(c.key);
               break;
-            case 'bpm':
-              audio.setBpm(c.v);
+            case 'bpm': {
+              const v = Number(c.v);
+              if (!Number.isFinite(v)) break;
+              const bpm = Math.max(40, Math.min(220, Math.round(v)));
+              rig.global.bpm = bpm; // the ONE tempo store; audio follows it
+              audio.setBpm(bpm);
               break;
+            }
             case 'master':
               setMasterGain(Math.max(0, Math.min(1, c.v)));
               break;
