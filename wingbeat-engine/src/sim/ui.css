@@ -994,3 +994,25 @@ input[type='range']::-moz-range-thumb {
   color: #66667a; font-size: 12px; cursor: pointer; padding: 6px;
 }
 .wb-ctl-strip-x:active { color: #e0556b; }
+
+/* ── Controller: FX matrix on the pad ───────────────────────────────────── */
+.wb-ctl-fx-corner {
+  position: absolute; z-index: 1; pointer-events: none;
+  font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: #66667a;
+}
+.wb-ctl-fx-corner.tl { top: 10px; left: 12px; }
+.wb-ctl-fx-corner.tr { top: 10px; right: 12px; }
+.wb-ctl-fx-corner.bl { bottom: 10px; left: 12px; }
+.wb-ctl-fx-corner.br { bottom: 10px; right: 12px; }
+.wb-ctl-fx-cross {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0.35;
+  background:
+    linear-gradient(#2c2c38, #2c2c38) center / 1px 62% no-repeat,
+    linear-gradient(#2c2c38, #2c2c38) center / 62% 1px no-repeat;
+}
+.wb-ctl-fx-dot {
+  position: absolute; z-index: 1; pointer-events: none;
+  width: 26px; height: 26px; border-radius: 50%; transform: translate(-50%, -50%);
+  background: radial-gradient(circle, rgba(196, 168, 255, 0.9), rgba(124, 58, 237, 0.15) 70%);
+  box-shadow: 0 0 18px rgba(124, 58, 237, 0.55);
+}

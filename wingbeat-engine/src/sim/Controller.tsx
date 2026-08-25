@@ -115,6 +115,13 @@ export default function Controller() {
     handlesRef.current.get(key)?.send(c);
     if (c.t === 'motion') sentRef.current++;
   }, []);
+  /** the first connected channel only — for global verbs that act on the
+   *  whole page anyway (the FX pad at 30 fps through 3 channels would just
+   *  triple the traffic) */
+  const sendPrimary = useCallback((c: Control) => {
+    const first = chansRef.current[0];
+    if (first) handlesRef.current.get(first.key)?.send(c);
+  }, []);
 
   // Periodically report how many motion frames have been sent — so the log shows
   // whether data is actually leaving the phone.
@@ -145,19 +152,37 @@ export default function Controller() {
   const freeAds = available.filter((a) => a.peers === 0 && !chans.some((x) => x.d === a.d && x.c === a.c));
 
   // --- Motion pad: drag speed → 0..1 motion, sent ~30fps, 0 on release. -------
+  //     The SAME surface is the FX matrix: finger POSITION picks the effect
+  //     (TL delay · TR reverb · BL high-pass · BR low-pass, center = dry,
+  //     distance = amount) while finger SPEED keeps blowing wind — one hand
+  //     plays both layers at once.
   const padState = useRef({ active: false, x: 0, y: 0, t: 0, last: 0 });
   const [padLevel, setPadLevel] = useState(0);
+  const [fxPos, setFxPos] = useState<{ x: number; y: number } | null>(null);
 
   const emitMotion = (v: number) => {
     setPadLevel(v);
     send({ t: 'motion', v });
   };
 
+  const fxFrom = (e: React.PointerEvent): { x: number; y: number } => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(-1, Math.min(1, ((e.clientX - r.left) / Math.max(1, r.width)) * 2 - 1)),
+      y: Math.max(-1, Math.min(1, 1 - ((e.clientY - r.top) / Math.max(1, r.height)) * 2)),
+    };
+  };
+  const emitFx = (pos: { x: number; y: number } | null) => {
+    setFxPos(pos);
+    sendPrimary(pos ? { t: 'fx', x: pos.x, y: pos.y, on: true } : { t: 'fx', x: 0, y: 0, on: false });
+  };
+
   const onPadDown = (e: React.PointerEvent) => {
-    (e.target as Element).setPointerCapture?.(e.pointerId);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     const now = performance.now();
     padState.current = { active: true, x: e.clientX, y: e.clientY, t: now, last: now };
     emitMotion(0.15);
+    emitFx(fxFrom(e));
   };
   const onPadMove = (e: React.PointerEvent) => {
     const s = padState.current;
@@ -172,10 +197,12 @@ export default function Controller() {
     if (now - s.last < 33) return; // throttle ~30fps
     s.last = now;
     emitMotion(clamp01(speed * 0.9));
+    emitFx(fxFrom(e));
   };
   const onPadUp = () => {
     padState.current.active = false;
     emitMotion(0);
+    emitFx(null);
   };
 
   const [tilt, setTilt] = useState(false); // accelerometer on
@@ -409,8 +436,29 @@ export default function Controller() {
         onPointerCancel={camOn ? undefined : onPadUp}
       >
         <canvas ref={camCanvasRef} className="wb-ctl-cam" style={{ display: camOn ? 'block' : 'none' }} />
+        {!camOn && (
+          <>
+            <span className="wb-ctl-fx-corner tl">delay</span>
+            <span className="wb-ctl-fx-corner tr">reverb</span>
+            <span className="wb-ctl-fx-corner bl">high-pass</span>
+            <span className="wb-ctl-fx-corner br">low-pass</span>
+            <span className="wb-ctl-fx-cross" />
+            {fxPos && (
+              <span
+                className="wb-ctl-fx-dot"
+                style={{ left: `${((fxPos.x + 1) / 2) * 100}%`, top: `${((1 - fxPos.y) / 2) * 100}%` }}
+              />
+            )}
+          </>
+        )}
         <span className="wb-ctl-pad-label">
-          {camOn ? 'camera — wave in front of the phone' : tilt ? 'shake the phone' : chans.length > 1 ? 'swipe / wave here — all channels' : 'swipe / wave here'}
+          {camOn
+            ? 'camera — wave in front of the phone'
+            : tilt
+              ? 'shake the phone'
+              : chans.length > 1
+                ? 'swipe = wind (all channels) · hold toward a corner = fx'
+                : 'swipe = wind · hold toward a corner = fx'}
         </span>
         <div className="wb-level" style={{ maxWidth: 260 }}>
           <div className="wb-level-fill" style={{ width: `${Math.round(padLevel * 100)}%`, background: 'linear-gradient(90deg,#7c3aed,#c4a8ff)' }} />

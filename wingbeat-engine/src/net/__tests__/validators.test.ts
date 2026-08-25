@@ -7,12 +7,15 @@ describe('parseControl (phone → console)', () => {
     expect(parseControl({ t: 'motion', v: 1.7 })).toEqual({ t: 'motion', v: 1 });
     expect(parseControl({ t: 'bpm', v: 999.4 })).toEqual({ t: 'bpm', v: 220 });
     expect(parseControl({ t: 'scene', key: 'crane_ghana' })).toEqual({ t: 'scene', key: 'crane_ghana' });
+    expect(parseControl({ t: 'fx', x: 2, y: -0.5, on: true })).toEqual({ t: 'fx', x: 1, y: -0.5, on: true });
+    expect(parseControl({ t: 'fx', x: 0, y: 0, on: 'yes' })).toEqual({ t: 'fx', x: 0, y: 0, on: false });
   });
   it('drops NaN, unknown verbs and injection-shaped keys', () => {
     expect(parseControl({ t: 'bpm', v: NaN })).toBeNull();
     expect(parseControl({ t: 'motion', v: '0.5' })).toBeNull();
     expect(parseControl({ t: 'reboot' })).toBeNull();
     expect(parseControl({ t: 'scene', key: '<script>' })).toBeNull();
+    expect(parseControl({ t: 'fx', x: NaN, y: 0, on: true })).toBeNull();
     expect(parseControl('hello')).toBeNull();
   });
 });

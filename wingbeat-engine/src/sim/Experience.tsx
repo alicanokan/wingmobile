@@ -168,6 +168,9 @@ export default function Experience() {
       case 'master':
         setMasterGain(Math.max(0, Math.min(1, c.v)));
         break;
+      case 'fx':
+        audio.setFx(c.x, c.y, c.on);
+        break;
     }
   };
 

@@ -72,6 +72,12 @@ export class AudioEngine {
 
   private master!: Tone.Gain;
   private reverb!: Tone.Reverb;
+  // master FX section (the phone's XY pad): high-pass → low-pass → delay,
+  // then the existing reverb. Neutral = inaudible; see setFx.
+  private fxHp!: Tone.Filter;
+  private fxLp!: Tone.Filter;
+  private fxDelay!: Tone.FeedbackDelay;
+  private fxReverbAmt = 0;
   private meter?: Tone.Meter;
   private buses!: Record<LayerName, Tone.Gain>;
 
@@ -190,7 +196,12 @@ export class AudioEngine {
 
     this.reverb = new Tone.Reverb({ decay: 6, wet: this.reverbWet }).toDestination();
     await this.reverb.generate();
-    this.master = new Tone.Gain(masterGain).connect(this.reverb);
+    this.master = new Tone.Gain(masterGain);
+    // master → HP → LP → delay → reverb. All neutral until the FX pad moves.
+    this.fxHp = new Tone.Filter(20, 'highpass');
+    this.fxLp = new Tone.Filter(18000, 'lowpass');
+    this.fxDelay = new Tone.FeedbackDelay({ delayTime: this.delayTimeSec(), feedback: 0.3, wet: 0, maxDelay: 2 });
+    this.master.chain(this.fxHp, this.fxLp, this.fxDelay, this.reverb);
     // tap the master for a live level (drives the projection's audio-reactivity)
     this.meter = new Tone.Meter({ normalRange: true, smoothing: 0.8 });
     this.master.connect(this.meter);
@@ -283,6 +294,7 @@ export class AudioEngine {
   async stop(): Promise<void> {
     if (!this.ready || !this.running) return;
     this.running = false;
+    this.setFx(0, 0, false); // don't park a filter sweep across the stop
     try { this.bed.releaseAll(); } catch { /* nothing held */ }
     this.noiseGain.gain.rampTo(0, 0.2);
     for (const [, l] of this.loops) l.gain.gain.rampTo(0, 0.25);
@@ -307,6 +319,7 @@ export class AudioEngine {
     if (this.ready) {
       const nodes: Array<{ dispose(): unknown } | undefined> = [
         this.bedLfo, this.bed, this.noise, this.noiseFilter, this.noiseGain, this.pluck, this.pluckPan,
+        this.fxHp, this.fxLp, this.fxDelay,
         this.perc, this.percPan, this.bell, this.bellPan, this.layerSynth, this.layerPan,
         this.buses?.bed, this.buses?.wind, this.buses?.melody, this.buses?.perc, this.buses?.accent,
         this.meter, this.master, this.reverb,
@@ -400,8 +413,63 @@ export class AudioEngine {
   }
   setReverbWet(w: number) {
     this.reverbWet = w;
-    if (this.ready) this.reverb.wet.rampTo(w, 0.2);
+    this.applyReverbWet(0.2);
     this.persist();
+  }
+
+  // ---- FX matrix ---------------------------------------------------------
+  //
+  // One XY surface, Kaoss-style: the quadrant picks the effect, distance from
+  // center is the amount, and adjacent quadrants crossfade (an edge midpoint
+  // is half of each neighbour), so there are no dead zones:
+  //
+  //     delay ─┐ ┌─ reverb
+  //         TL │ │ TR
+  //        ────┼─┼────      center = dry
+  //         BL │ │ BR
+  // high-pass ─┘ └─ low-pass
+  //
+  // The delay is tempo-synced (an 8th at the current bpm — see setBpm).
+
+  /** current corner weights, for any UI that wants to display them */
+  fx = { delay: 0, reverb: 0, highpass: 0, lowpass: 0 };
+
+  private delayTimeSec(): number {
+    return 60 / this.bpm / 2; // an 8th note
+  }
+
+  setFx(x: number, y: number, on: boolean) {
+    const cx = Math.max(-1, Math.min(1, x));
+    const cy = Math.max(-1, Math.min(1, y));
+    const r = on ? Math.min(1, Math.hypot(cx, cy)) : 0;
+    let tl = 0, tr = 0, bl = 0, br = 0;
+    if (r > 0.03) {
+      const th = Math.atan2(cy, cx);
+      const w = (corner: number) => {
+        const d = Math.cos(th - corner);
+        return d > 0 ? d * d * r : 0;
+      };
+      tr = w(Math.PI / 4);
+      tl = w((3 * Math.PI) / 4);
+      bl = w((-3 * Math.PI) / 4);
+      br = w(-Math.PI / 4);
+    }
+    this.fx = { delay: tl, reverb: tr, highpass: bl, lowpass: br };
+    this.fxReverbAmt = tr;
+    if (!this.ready) return;
+    const logLerp = (a: number, b: number, t: number) => a * Math.pow(b / a, Math.max(0, Math.min(1, t)));
+    this.fxLp.frequency.rampTo(logLerp(18000, 160, br), 0.06);
+    this.fxHp.frequency.rampTo(logLerp(20, 3800, bl), 0.06);
+    this.fxDelay.wet.rampTo(Math.min(0.65, tl * 0.65), 0.08);
+    this.fxDelay.feedback.rampTo(0.25 + tl * 0.35, 0.1);
+    this.applyReverbWet();
+  }
+
+  /** The reverb serves two masters: the operator's Voices slider is the
+   *  floor, the FX pad pushes above it, release falls back to the floor. */
+  private applyReverbWet(ramp = 0.1) {
+    if (!this.ready) return;
+    this.reverb.wet.rampTo(Math.max(0, Math.min(1, Math.max(this.reverbWet, this.fxReverbAmt))), ramp);
   }
 
   // ---- Samples (replace a trigger layer's sound) -------------------------
@@ -504,6 +572,7 @@ export class AudioEngine {
     if (this.transportOn) Tone.getTransport().bpm.rampTo(bpm, 0.1);
     const rate = this.loopRate();
     for (const [, l] of this.loops) l.player.playbackRate = rate;
+    if (this.ready) this.fxDelay.delayTime.rampTo(this.delayTimeSec(), 0.1); // keep the FX delay on the grid
   }
   /** Tempo at which loops play at rate 1. Override when the material's
    *  authored tempo is known (e.g. a scene pack's stems). */

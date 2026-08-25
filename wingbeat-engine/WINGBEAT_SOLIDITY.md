@@ -231,6 +231,20 @@ all clean — and now enforced by CI on every push
   accelerometer drive ALL connected channels; a strip drives only its own.
 - Tests: `parseHostMsg` round-trip + rejection (40 total).
 
+## Changelog — 2026-08-26 (later), FX matrix on the phone pad
+
+- ✅ The controller's all-channels pad is now a Kaoss-style **FX matrix**:
+  finger position drives a master FX section (`AudioEngine.setFx` — new
+  chain master → high-pass → low-pass → tempo-synced FeedbackDelay → reverb),
+  quadrants TL delay · TR reverb · BL high-pass · BR low-pass, center = dry,
+  radius = amount, adjacent quadrants crossfade (no dead edges). Finger
+  SPEED still blows wind on all channels — one hand plays both layers.
+- Wire: new `fx` verb in `Control` (validated; sent through the primary
+  channel only, ~30 fps). Delay time follows `setBpm` (an 8th on the grid);
+  the FX reverb rides ABOVE the operator's Voices wet and falls back to it
+  on release; `stop()` resets the FX so a filter sweep can't park across a
+  stop. Corner labels + crosshair + glow dot on the pad.
+
 ---
 
 ## The verdict in one paragraph

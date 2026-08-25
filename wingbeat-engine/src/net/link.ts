@@ -23,7 +23,10 @@ export type Control =
   | { t: 'blow'; v: number } // 0..1 one-shot pulse → "Net" source
   | { t: 'scene'; key: string } // switch scene
   | { t: 'bpm'; v: number } // loop tempo
-  | { t: 'master'; v: number }; // master volume 0..1
+  | { t: 'master'; v: number } // master volume 0..1
+  /** the FX matrix pad: x,y in -1..1 (center = dry), on=false on release.
+   *  Quadrants: TL delay · TR reverb · BL high-pass · BR low-pass. */
+  | { t: 'fx'; x: number; y: number; on: boolean };
 
 export type LinkStatus = 'idle' | 'connecting' | 'ready' | 'peer' | 'error';
 
@@ -49,6 +52,12 @@ export function parseControl(raw: unknown): Control | null {
     case 'master': {
       const v = num01(r.v);
       return v === null ? null : { t: 'master', v };
+    }
+    case 'fx': {
+      const cl = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(-1, Math.min(1, v)) : null);
+      const x = cl(r.x);
+      const y = cl(r.y);
+      return x === null || y === null ? null : { t: 'fx', x, y, on: r.on === true };
     }
     default:
       return null;
