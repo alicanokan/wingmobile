@@ -262,6 +262,11 @@ export default function Experience() {
   // presses STACK, then the air leaks back out at that part's Release. Keys are
   // per-channel (q w e r t), so the page is playable without a phone.
   const keyAir = useRef<number[]>(new Array(SLOT_PART.length).fill(0));
+
+  // Console-debuggable, same as the operator page.
+  useEffect(() => {
+    (window as unknown as { xp?: object }).xp = { audio, engine, transport, rig, motion, keyAir };
+  }, [audio, engine, transport]);
   useEffect(() => {
     const onDown = (ev: KeyboardEvent) => {
       if (ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey) return;
@@ -278,14 +283,18 @@ export default function Experience() {
     return () => window.removeEventListener('keydown', onDown);
   }, []);
 
-  // Per-frame: each slot's motion → its fixed part, shaped by rig sensitivity.
+  // The input pump: each slot's motion → its fixed part, shaped by rig
+  // sensitivity. Runs on a TIMER, not requestAnimationFrame — rAF stops
+  // COMPLETELY when the tab is hidden (behind another window, screen off),
+  // which silenced the whole page the moment you looked away from it while
+  // playing from a phone. A timer is throttled in a hidden tab but keeps
+  // ticking, and once sound is audible Chrome stops throttling it entirely.
   useEffect(() => {
-    let raf = 0;
     let last = performance.now();
     const driven = new Set<string>();
-    const loop = (t: number) => {
-      raf = requestAnimationFrame(loop);
-      const dt = Math.min(0.1, (t - last) / 1000);
+    const loop = () => {
+      const t = performance.now();
+      const dt = Math.min(0.25, (t - last) / 1000);
       last = t;
       for (let i = 0; i < SLOT_PART.length; i++) {
         const id = SLOT_PART[i];
@@ -308,9 +317,9 @@ export default function Experience() {
         }
       }
     };
-    raf = requestAnimationFrame(loop);
+    const timer = setInterval(loop, 33);
     return () => {
-      cancelAnimationFrame(raf);
+      clearInterval(timer);
       driven.forEach((id) => {
         transport.releaseWind(id);
         transport.setPresence(id, false);

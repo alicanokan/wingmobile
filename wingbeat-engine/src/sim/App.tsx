@@ -552,18 +552,20 @@ export default function App() {
       setPresence: (id: string, p: boolean) =>
         simT ? simT.setPresence(id, p) : engine.ingestPresence(id, p),
     };
-    let raf = 0;
     let meterTick = 0;
     let lastT = 0;
     let keyPeak = 0; // live max key pulse, for the keyboard meter
     const driven = new Set<string>(); // parts we currently hold, to release on unpatch
 
-    const loop = (t: number) => {
-      raf = requestAnimationFrame(loop);
+    // A timer, not requestAnimationFrame: rAF freezes in a hidden tab, which
+    // cut every phone/mic/camera input (and so all sound) the moment the
+    // console was behind another window. See the same note in Experience.tsx.
+    const loop = () => {
+      const t = performance.now();
       const micLvl = mic.active ? mic.level() : 0;
       const camReading = cam.active ? cam.read() : null;
       const camLvl = camReading?.motion ?? 0;
-      const dt = lastT ? Math.min(0.1, (t - lastT) / 1000) : 1 / 60;
+      const dt = lastT ? Math.min(0.25, (t - lastT) / 1000) : 1 / 60;
       lastT = t;
 
       // Stage 1: each slot's current value from its source.
@@ -624,9 +626,9 @@ export default function App() {
         setLevels(lv);
       }
     };
-    raf = requestAnimationFrame(loop);
+    const timer = setInterval(loop, 33);
     return () => {
-      cancelAnimationFrame(raf);
+      clearInterval(timer);
       driven.forEach((id) => {
         sim.releaseWind(id);
         sim.setPresence(id, false);

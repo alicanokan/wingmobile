@@ -245,6 +245,22 @@ all clean — and now enforced by CI on every push
   on release; `stop()` resets the FX so a filter sweep can't park across a
   stop. Corner labels + crosshair + glow dot on the pad.
 
+## Changelog — 2026-08-26 (night), the silent-tab bug
+
+- ✅ **Found why "it looks working but no sound"**: the input pumps (phone /
+  mic / camera / keyboard → wind) ran on `requestAnimationFrame`, and rAF
+  stops COMPLETELY in a hidden tab — the moment `/experience` or the console
+  was behind another window (which it always is while you play from the
+  phone), every input froze and the page fell silent while looking perfectly
+  alive on the phone. Verified live with meters on the deployed site: audio
+  chain healthy, wind stuck at 0.
+- ✅ Both pumps now run on 33 ms timers (Experience + the console's central
+  router). A hidden tab throttles timers but never stops them, and once
+  sound is audible Chrome stops throttling the tab entirely — so it
+  self-recovers within a second even from a cold hidden start.
+- ✅ `/experience` now exposes `window.xp` ({ audio, engine, transport, rig,
+  motion, keyAir }) for venue debugging, same spirit as `wb`/`wbAudio` on `/`.
+
 ---
 
 ## The verdict in one paragraph
