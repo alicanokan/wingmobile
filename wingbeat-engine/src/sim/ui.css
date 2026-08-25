@@ -967,3 +967,30 @@ input[type='range']::-moz-range-thumb {
 /* keyboard monitor fill — neutral so it reads on either track colour */
 .wb-key-level .wb-level-fill { background: linear-gradient(90deg, #8a8a98, #e8e8e8); }
 .wb-light .wb-key-level .wb-level-fill { background: linear-gradient(90deg, #4a4a56, #8a8a92); }
+
+/* ── Controller: multi-channel view ─────────────────────────────────────── */
+.wb-ctl-add { padding: 6px 12px; font-size: 16px; line-height: 1; }
+.wb-ctl-addbox { border: 1px dashed #2c2c38; border-radius: 12px; padding: 12px; }
+.wb-ctl-freechans { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.wb-ctl-freechans .wb-btn { justify-content: center; text-align: center; }
+.wb-ctl-strips { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 10px; height: 150px; }
+.wb-ctl-strip {
+  position: relative; border: 1px solid #2c2c38; border-radius: 12px; background: #0c0c12;
+  overflow: hidden; touch-action: none; user-select: none; cursor: grab;
+}
+.wb-ctl-strip.live { border-color: #7c3aed; }
+.wb-ctl-strip-fill {
+  position: absolute; left: 0; right: 0; bottom: 0; pointer-events: none;
+  background: linear-gradient(180deg, #c4a8ff, #7c3aed); opacity: 0.8; transition: height 0.05s linear;
+}
+.wb-ctl-strip-label {
+  position: absolute; top: 8px; left: 0; right: 0; z-index: 1; pointer-events: none; text-align: center;
+  font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #b7a8e6;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px;
+}
+.wb-ctl-strip > .wb-dot { position: absolute; bottom: 8px; left: 8px; z-index: 1; }
+.wb-ctl-strip-x {
+  position: absolute; top: 2px; right: 2px; z-index: 2; background: none; border: none;
+  color: #66667a; font-size: 12px; cursor: pointer; padding: 6px;
+}
+.wb-ctl-strip-x:active { color: #e0556b; }

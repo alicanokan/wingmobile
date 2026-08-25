@@ -55,6 +55,48 @@ export function parseControl(raw: unknown): Control | null {
   }
 }
 
+// ---- Console → phone messages ----------------------------------------------
+//
+// The data channel back to the phone used to be silent. It now carries one
+// message: the console's channel directory, so a phone can offer "add another
+// channel" without anyone reading codes off the projection screen.
+
+/** One joinable room on the console: a single part or a multi-part group. */
+export interface ChannelAd {
+  d: string; // Device ID
+  c: string; // Code
+  label: string;
+  /** phones currently in that room — 0 means free */
+  peers: number;
+  kind: 'part' | 'group';
+}
+
+export type HostMsg = { t: 'channels'; list: ChannelAd[] };
+
+const CODE_RE = /^[A-Z0-9]{3,8}$/;
+
+/** Validate a frame from the console — same reasoning as parseControl, in the
+ *  other direction: the console may be a newer build than the phone. */
+export function parseHostMsg(raw: unknown): HostMsg | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (r.t !== 'channels' || !Array.isArray(r.list)) return null;
+  const list: ChannelAd[] = [];
+  for (const it of r.list.slice(0, 24)) {
+    if (!it || typeof it !== 'object') continue;
+    const a = it as Record<string, unknown>;
+    if (typeof a.d !== 'string' || typeof a.c !== 'string' || !CODE_RE.test(a.d) || !CODE_RE.test(a.c)) continue;
+    list.push({
+      d: a.d,
+      c: a.c,
+      label: typeof a.label === 'string' ? a.label.slice(0, 32) : `${a.d}-${a.c}`,
+      peers: typeof a.peers === 'number' && Number.isFinite(a.peers) ? Math.max(0, Math.round(a.peers)) : 0,
+      kind: a.kind === 'group' ? 'group' : 'part',
+    });
+  }
+  return { t: 'channels', list };
+}
+
 // ---- Network configuration (signalling + ICE) -------------------------------
 //
 // Defaults are the free public services (PeerJS cloud + openrelay TURN), which
@@ -183,6 +225,8 @@ export interface HostHandle {
   deviceId: string;
   code: string;
   peerCount(): number;
+  /** Push a message to every connected phone (e.g. the channel directory). */
+  broadcast(m: HostMsg): void;
   destroy(): void;
 }
 
@@ -198,6 +242,9 @@ export function startHost(opts: {
   onStatus: (s: LinkStatus) => void;
   onPeers?: (n: number) => void;
   onIdentity?: (deviceId: string, code: string) => void;
+  /** Called when a phone's channel opens — its return value is sent to that
+   *  phone right away (the channel directory greeting). */
+  hello?: () => HostMsg | null;
   onLog?: Log;
 }): HostHandle {
   const log = opts.onLog ?? noop;
@@ -225,6 +272,10 @@ export function startHost(opts: {
         log(`phone OPEN: ${conn.peer} (${conns.size} total)`);
         watchIce(conn, log);
         report();
+        const h = opts.hello?.();
+        if (h) {
+          try { conn.send(h); } catch { /* channel raced shut */ }
+        }
       });
       conn.on('data', (d) => {
         const c = parseControl(d);
@@ -305,6 +356,12 @@ export function startHost(opts: {
       return code;
     },
     peerCount: () => conns.size,
+    broadcast(m) {
+      for (const c of conns) {
+        if (!c.open) continue;
+        try { c.send(m); } catch { /* mid-close */ }
+      }
+    },
     destroy() {
       destroyed = true;
       conns.forEach((c) => c.close());
@@ -329,7 +386,7 @@ export interface ClientHandle {
 export function connectHost(
   deviceId: string,
   code: string,
-  opts: { onStatus: (s: LinkStatus) => void; onLog?: Log },
+  opts: { onStatus: (s: LinkStatus) => void; onMsg?: (m: HostMsg) => void; onLog?: Log },
 ): ClientHandle {
   const log = opts.onLog ?? noop;
   const targetId = peerIdFor(deviceId, code);
@@ -382,7 +439,10 @@ export function connectHost(
       opts.onStatus('peer');
       c.send({ t: 'hello' } satisfies Control);
     });
-    c.on('data', () => {}); // console→phone is unused today, but keeps the channel warm
+    c.on('data', (d) => {
+      const m = parseHostMsg(d);
+      if (m) opts.onMsg?.(m);
+    });
     c.on('close', () => {
       if (conn === c) conn = null;
       opts.onStatus('ready');

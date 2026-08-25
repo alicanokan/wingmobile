@@ -215,6 +215,22 @@ all clean — and now enforced by CI on every push
 - ⏳ **OSC out**: design only — a bus consumer like MidiOut plus a
   WebSocket→UDP bridge on the laptop. Not started (decision: future).
 
+## Changelog — 2026-08-26, multi-channel control
+
+- ✅ `/experience` Control sheet: **group codes** — select 2+ parts, mint one
+  QR/code; a phone joining it drives all of them with the same gesture
+  (`handleControl` fan-out). Groups persist (`wb.xpGroups.v1`, same codes
+  after a reload) and are removable per tile.
+- ✅ The console→phone data channel now carries a **channel directory**
+  (`HostMsg`/`ChannelAd` in `net/link.ts`, validated by `parseHostMsg`; sent
+  on join and re-broadcast on every change).
+- ✅ `/controller`: **＋ button** lists the console's free channels (one-tap
+  add, manual codes as fallback); each added channel is its own PeerJS
+  connection with its own strip in a **multi-channel view** (vertical touch
+  faders, multi-touch, per-channel status + remove). The big pad, camera and
+  accelerometer drive ALL connected channels; a strip drives only its own.
+- Tests: `parseHostMsg` round-trip + rejection (40 total).
+
 ---
 
 ## The verdict in one paragraph

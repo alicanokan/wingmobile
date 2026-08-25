@@ -26,7 +26,8 @@ import { Projection } from './Projection.tsx';
 import { FEATHERS, DEFAULT_FEATHER } from './feathers.ts';
 import { SENSOR_CHANNELS } from './channels.ts';
 import { rig } from './rig.ts';
-import { startHost, type HostHandle, type LinkStatus } from '../net/link.ts';
+import { startHost, type ChannelAd, type Control, type HostHandle, type HostMsg, type LinkStatus } from '../net/link.ts';
+import { saveJson } from './persisted.ts';
 import { useConductorSync, applyConductorConfig } from '../net/liveSync.ts';
 import { listCloudPresets, type CloudPreset } from '../net/cloud.ts';
 import { DEVICE_COUNT } from './inputs.ts';
@@ -36,6 +37,34 @@ type Sheet = 'feather' | 'presets' | 'control' | 'mix' | null;
 // Each phone slot drives one feather part, fixed 1:1 (dev1→Tip … dev5→Tail):
 // no routing matrix here — that's what the console is for.
 const SLOT_PART = SENSOR_CHANNELS.map((c) => c.sensor);
+
+// ---- control groups ---------------------------------------------------------
+// A group is ONE extra room whose phone drives SEVERAL parts at once: pick the
+// parts in the Control sheet, mint a code, and every motion frame that arrives
+// on it fans out to all of them. Groups persist across reloads (same codes, so
+// a paired phone survives a page refresh).
+const GROUPS_KEY = 'wb.xpGroups.v1';
+interface SavedGroup { deviceId?: string; code?: string; slots: number[] }
+interface GroupView { uid: number; slots: number[]; deviceId: string; code: string; status: LinkStatus; peers: number }
+
+function loadSavedGroups(): SavedGroup[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(GROUPS_KEY) ?? '[]');
+    if (!Array.isArray(raw)) return [];
+    const ok = (v: unknown) => typeof v === 'string' && /^[A-Z0-9]{3,8}$/.test(v);
+    return raw
+      .map((g) => {
+        if (!g || typeof g !== 'object' || !Array.isArray((g as SavedGroup).slots)) return null;
+        const slots = [...new Set((g as SavedGroup).slots.filter((i) => typeof i === 'number' && Number.isInteger(i) && i >= 0 && i < DEVICE_COUNT))].sort((a, b) => a - b);
+        if (slots.length < 2) return null;
+        const sg = g as Record<string, unknown>;
+        return { slots, ...(ok(sg.deviceId) ? { deviceId: sg.deviceId as string } : {}), ...(ok(sg.code) ? { code: sg.code as string } : {}) } as SavedGroup;
+      })
+      .filter((g): g is SavedGroup => !!g);
+  } catch {
+    return [];
+  }
+}
 
 export default function Experience() {
   const engine = useMemo(() => new WingbeatEngine(), []);
@@ -103,6 +132,77 @@ export default function Experience() {
   const [devicePeers, setDevicePeers] = useState<number[]>(Array(DEVICE_COUNT).fill(0));
   const [deviceStatus, setDeviceStatus] = useState<LinkStatus[]>(Array(DEVICE_COUNT).fill('idle'));
 
+  const [groups, setGroups] = useState<GroupView[]>([]);
+  const [groupSel, setGroupSel] = useState<Set<number>>(new Set());
+  const groupHostsRef = useRef<Map<number, HostHandle>>(new Map());
+  const groupDefsRef = useRef<Map<number, SavedGroup>>(new Map());
+  const groupUid = useRef(0);
+  const adsRef = useRef<ChannelAd[]>([]);
+
+  // One motion frame in → one or many parts driven. Devices pass [i]; groups
+  // pass their whole slot list.
+  const feedMotion = (i: number, v: number) => {
+    motion.current[i] = Math.max(0, Math.min(1, v));
+    if (stale.current[i]) clearTimeout(stale.current[i]);
+    stale.current[i] = setTimeout(() => {
+      motion.current[i] = 0;
+    }, 1500);
+  };
+  const handleControl = (c: Control, slots: number[]) => {
+    switch (c.t) {
+      case 'motion':
+      case 'blow':
+        for (const i of slots) feedMotion(i, c.v);
+        break;
+      case 'scene':
+        engine.setScene(c.key);
+        break;
+      case 'bpm': {
+        const v = Number(c.v);
+        if (!Number.isFinite(v)) break;
+        const bpm = Math.max(40, Math.min(220, Math.round(v)));
+        rig.global.bpm = bpm; // the ONE tempo store; audio follows it
+        audio.setBpm(bpm);
+        break;
+      }
+      case 'master':
+        setMasterGain(Math.max(0, Math.min(1, c.v)));
+        break;
+    }
+  };
+
+  const persistGroups = () =>
+    saveJson(GROUPS_KEY, [...groupDefsRef.current.values()].map((g) => ({ deviceId: g.deviceId, code: g.code, slots: g.slots })));
+
+  const spawnGroup = (slots: number[], saved?: SavedGroup) => {
+    const uid = ++groupUid.current;
+    groupDefsRef.current.set(uid, { slots, deviceId: saved?.deviceId, code: saved?.code });
+    const h = startHost({
+      deviceId: saved?.deviceId,
+      code: saved?.code,
+      onStatus: (st) => setGroups((gs) => gs.map((g) => (g.uid === uid ? { ...g, status: st } : g))),
+      onIdentity: (d, c) => {
+        groupDefsRef.current.set(uid, { slots, deviceId: d, code: c });
+        persistGroups();
+        setGroups((gs) => gs.map((g) => (g.uid === uid ? { ...g, deviceId: d, code: c } : g)));
+      },
+      onPeers: (n) => setGroups((gs) => gs.map((g) => (g.uid === uid ? { ...g, peers: n } : g))),
+      onControl: (c) => handleControl(c, slots),
+      hello: () => ({ t: 'channels', list: adsRef.current }),
+    });
+    groupHostsRef.current.set(uid, h);
+    persistGroups();
+    setGroups((gs) => [...gs, { uid, slots, deviceId: h.deviceId, code: h.code, status: 'connecting', peers: 0 }]);
+  };
+
+  const removeGroup = (uid: number) => {
+    groupHostsRef.current.get(uid)?.destroy();
+    groupHostsRef.current.delete(uid);
+    groupDefsRef.current.delete(uid);
+    persistGroups();
+    setGroups((gs) => gs.filter((g) => g.uid !== uid));
+  };
+
   useEffect(() => {
     if (linksRef.current.length) return;
     const setAt = <T,>(setter: React.Dispatch<React.SetStateAction<T[]>>, i: number, value: T) =>
@@ -116,36 +216,13 @@ export default function Experience() {
         onStatus: (s) => setAt(setDeviceStatus, i, s),
         onIdentity: (deviceId, code) => setAt<{ deviceId: string; code: string } | null>(setDeviceInfo, i, { deviceId, code }),
         onPeers: (n) => setAt(setDevicePeers, i, n),
-        onControl: (c) => {
-          switch (c.t) {
-            case 'motion':
-            case 'blow': {
-              motion.current[i] = Math.max(0, Math.min(1, c.v));
-              if (stale.current[i]) clearTimeout(stale.current[i]);
-              stale.current[i] = setTimeout(() => {
-                motion.current[i] = 0;
-              }, 1500);
-              break;
-            }
-            case 'scene':
-              engine.setScene(c.key);
-              break;
-            case 'bpm': {
-              const v = Number(c.v);
-              if (!Number.isFinite(v)) break;
-              const bpm = Math.max(40, Math.min(220, Math.round(v)));
-              rig.global.bpm = bpm; // the ONE tempo store; audio follows it
-              audio.setBpm(bpm);
-              break;
-            }
-            case 'master':
-              setMasterGain(Math.max(0, Math.min(1, c.v)));
-              break;
-          }
-        },
+        onControl: (c) => handleControl(c, [i]),
+        hello: () => ({ t: 'channels', list: adsRef.current }),
       }),
     );
     setDeviceInfo(linksRef.current.map((h) => ({ deviceId: h.deviceId, code: h.code })));
+    // groups saved by an earlier session come back with the SAME codes
+    loadSavedGroups().forEach((g) => spawnGroup(g.slots, g));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(
@@ -153,9 +230,28 @@ export default function Experience() {
       stale.current.forEach((t) => t && clearTimeout(t));
       linksRef.current.forEach((h) => h.destroy());
       linksRef.current = [];
+      groupHostsRef.current.forEach((h) => h.destroy());
+      groupHostsRef.current.clear();
     },
     [],
   );
+
+  // Keep every connected phone's channel directory current: the "+" button on
+  // a phone lists exactly these (free ones), so nobody reads codes off the
+  // projection screen.
+  useEffect(() => {
+    const list: ChannelAd[] = [];
+    deviceInfo.forEach((info, i) => {
+      if (info) list.push({ d: info.deviceId, c: info.code, label: SENSOR_CHANNELS[i]?.label ?? `Part ${i + 1}`, peers: devicePeers[i] ?? 0, kind: 'part' });
+    });
+    for (const g of groups) {
+      list.push({ d: g.deviceId, c: g.code, label: g.slots.map((i) => SENSOR_CHANNELS[i]?.label ?? `P${i + 1}`).join(' + '), peers: g.peers, kind: 'group' });
+    }
+    adsRef.current = list;
+    const msg: HostMsg = { t: 'channels', list };
+    linksRef.current.forEach((h) => h.broadcast(msg));
+    groupHostsRef.current.forEach((h) => h.broadcast(msg));
+  }, [deviceInfo, devicePeers, groups]);
 
   // ---- keyboard: each key press puffs air into its part ------------------
   //
@@ -254,7 +350,7 @@ export default function Experience() {
   }, [sheet]);
 
   const featherLabel = FEATHERS.find((f) => f.id === feather)?.label ?? feather;
-  const joined = devicePeers.reduce((a, b) => a + (b > 0 ? 1 : 0), 0);
+  const joined = devicePeers.reduce((a, b) => a + (b > 0 ? 1 : 0), 0) + groups.reduce((a, g) => a + (g.peers > 0 ? 1 : 0), 0);
 
   const toggle = (s: Exclude<Sheet, null>) => setSheet((cur) => (cur === s ? null : s));
 
@@ -341,15 +437,67 @@ export default function Experience() {
             {deviceInfo.map((info, i) => (
               <DeviceQr
                 key={i}
-                index={i}
-                partLabel={SENSOR_CHANNELS[i]?.label ?? `Part ${i + 1}`}
+                label={SENSOR_CHANNELS[i]?.label ?? `Part ${i + 1}`}
                 partKey={SENSOR_CHANNELS[i]?.key ?? ''}
                 info={info}
                 status={deviceStatus[i]}
                 peers={devicePeers[i]}
                 level={motion}
+                indices={[i]}
               />
             ))}
+          </div>
+
+          <div className="xp-groupbar">
+            <div className="xp-note">
+              Group — one code, several parts: a phone that joins it drives them all with the same gesture. Pick parts, mint a code.
+            </div>
+            <div className="xp-groupchips">
+              {SENSOR_CHANNELS.map((c, i) => (
+                <button
+                  key={c.sensor}
+                  className={`xp-chip ${groupSel.has(i) ? 'active' : ''}`}
+                  onClick={() =>
+                    setGroupSel((sel) => {
+                      const next = new Set(sel);
+                      if (next.has(i)) next.delete(i);
+                      else next.add(i);
+                      return next;
+                    })
+                  }
+                >
+                  {c.label}
+                </button>
+              ))}
+              <button
+                className="xp-chip make"
+                disabled={groupSel.size < 2}
+                title={groupSel.size < 2 ? 'pick at least two parts' : 'create a QR + code for this combination'}
+                onClick={() => {
+                  spawnGroup([...groupSel].sort((a, b) => a - b));
+                  setGroupSel(new Set());
+                }}
+              >
+                ＋ create group code
+              </button>
+            </div>
+            {groups.length > 0 && (
+              <div className="xp-devices">
+                {groups.map((g) => (
+                  <DeviceQr
+                    key={g.uid}
+                    label={g.slots.map((i) => SENSOR_CHANNELS[i]?.label ?? `P${i + 1}`).join(' + ')}
+                    kindTag="group"
+                    info={{ deviceId: g.deviceId, code: g.code }}
+                    status={g.status}
+                    peers={g.peers}
+                    level={motion}
+                    indices={g.slots}
+                    onRemove={() => removeGroup(g.uid)}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -440,24 +588,29 @@ export default function Experience() {
   );
 }
 
-// One phone slot: QR + code + a live meter once someone joins. The meter reads
-// the shared motion ref at ~12 Hz — no per-frame React churn.
+// One joinable room: QR + code + a live meter once someone joins — a single
+// part or a whole group (the meter then shows the loudest of its parts). The
+// meter reads the shared motion ref at ~12 Hz — no per-frame React churn.
 function DeviceQr({
-  index,
-  partLabel,
+  label,
   partKey,
+  kindTag,
   info,
   status,
   peers,
   level,
+  indices,
+  onRemove,
 }: {
-  index: number;
-  partLabel: string;
-  partKey: string;
+  label: string;
+  partKey?: string;
+  kindTag?: string;
   info: { deviceId: string; code: string } | null;
   status: LinkStatus;
   peers: number;
   level: React.MutableRefObject<number[]>;
+  indices: number[];
+  onRemove?: () => void;
 }) {
   const [qr, setQr] = useState('');
   const [lvl, setLvl] = useState(0);
@@ -472,17 +625,24 @@ function DeviceQr({
 
   useEffect(() => {
     if (peers === 0) return;
-    const id = setInterval(() => setLvl(level.current[index] ?? 0), 80);
+    const id = setInterval(() => setLvl(Math.max(...indices.map((i) => level.current[i] ?? 0), 0)), 80);
     return () => clearInterval(id);
-  }, [peers, index, level]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [peers, indices.join(','), level]);
 
   const connected = peers > 0;
   return (
     <div className={`xp-dev ${connected ? 'joined' : ''}`}>
+      {onRemove && (
+        <button className="xp-dev-remove" title="remove this group" onClick={onRemove}>
+          ✕
+        </button>
+      )}
       <div className="xp-dev-part">
-        {partLabel}
+        {label}
         {partKey && <kbd title={`press ${partKey.toUpperCase()} to pump this part`}>{partKey.toUpperCase()}</kbd>}
       </div>
+      {kindTag && <div className="xp-dev-tag">{kindTag}</div>}
       {connected ? (
         <div className="xp-dev-live">
           <div className="xp-dev-meter">
@@ -491,7 +651,7 @@ function DeviceQr({
           <span>live</span>
         </div>
       ) : qr ? (
-        <img className="xp-dev-qr" src={qr} alt={`join ${partLabel}`} />
+        <img className="xp-dev-qr" src={qr} alt={`join ${label}`} />
       ) : (
         <div className="xp-dev-wait">{status === 'error' ? 'error' : '…'}</div>
       )}

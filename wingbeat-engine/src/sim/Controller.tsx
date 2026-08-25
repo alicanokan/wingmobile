@@ -6,44 +6,115 @@
 //  Reaches the console either by scanning the console's QR (Device ID + Code
 //  arrive as ?d= & ?c= and it connects automatically) or by typing the Device
 //  ID + Code shown on the console by hand.
+//
+//  One phone can drive SEVERAL channels at once: the ＋ button lists the
+//  console's free channels (the console announces them over the data channel)
+//  and each added channel gets its own strip in the multi-channel view. The
+//  big pad / camera / accelerometer drive ALL connected channels together;
+//  a strip drives only its own.
 // ============================================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import './ui.css';
 import { SCENES, SCENE_KEYS } from '../engine/scenes.ts';
 import { CameraSource } from './camera.ts';
-import { connectHost, type ClientHandle, type Control, type LinkStatus } from '../net/link.ts';
+import { connectHost, type ChannelAd, type ClientHandle, type Control, type LinkStatus } from '../net/link.ts';
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+
+/** One console room this phone is driving. */
+interface Chan {
+  key: number;
+  d: string;
+  c: string;
+  label: string;
+  status: LinkStatus;
+}
 
 export default function Controller() {
   const params = new URLSearchParams(location.search);
   const [deviceId, setDeviceId] = useState((params.get('d') ?? '').toUpperCase());
   const [code, setCode] = useState((params.get('c') ?? '').toUpperCase());
-  const [status, setStatus] = useState<LinkStatus>('idle');
   const [log, setLog] = useState<string[]>([]);
   const sentRef = useRef(0);
   const addLog = useCallback((msg: string) => setLog((l) => [...l.slice(-120), msg]), []);
 
-  const linkRef = useRef<ClientHandle | null>(null);
-  const send = useCallback(
-    (c: Control) => {
-      linkRef.current?.send(c);
-      if (c.t === 'motion') sentRef.current++;
-    },
-    [],
-  );
+  // ---- channels: this phone can drive several console rooms at once --------
+  const [chans, setChans] = useState<Chan[]>([]);
+  const chansRef = useRef<Chan[]>([]);
+  chansRef.current = chans;
+  const handlesRef = useRef(new Map<number, ClientHandle>());
+  const chanUid = useRef(0);
+  /** the console's channel directory, announced over the data channel */
+  const [available, setAvailable] = useState<ChannelAd[]>([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [addD, setAddD] = useState('');
+  const [addC, setAddC] = useState('');
 
-  const connect = useCallback(
-    (d: string, c: string) => {
-      if (!d || !c) return;
-      linkRef.current?.destroy();
-      setStatus('connecting');
-      addLog(`connect ${d}-${c}`);
-      linkRef.current = connectHost(d, c, { onStatus: (s) => { setStatus(s); addLog(`status: ${s}`); }, onLog: addLog });
+  const addChannel = useCallback(
+    (d: string, c: string, label?: string) => {
+      const D = d.trim().toUpperCase();
+      const C = c.trim().toUpperCase();
+      if (!D || !C) return;
+      if (chansRef.current.some((x) => x.d === D && x.c === C)) {
+        addLog(`already on ${D}-${C}`);
+        return;
+      }
+      const key = ++chanUid.current;
+      addLog(`connect ${D}-${C}`);
+      const h = connectHost(D, C, {
+        onStatus: (st) => {
+          setChans((cs) => cs.map((x) => (x.key === key ? { ...x, status: st } : x)));
+          addLog(`[${D}] status: ${st}`);
+        },
+        onMsg: (m) => setAvailable(m.list),
+        onLog: (msg) => addLog(`[${D}] ${msg}`),
+      });
+      handlesRef.current.set(key, h);
+      setChans((cs) => [...cs, { key, d: D, c: C, label: label ?? D, status: 'connecting' }]);
     },
     [addLog],
   );
+
+  const removeChannel = useCallback((key: number) => {
+    handlesRef.current.get(key)?.destroy();
+    handlesRef.current.delete(key);
+    setChans((cs) => cs.filter((x) => x.key !== key));
+  }, []);
+
+  const connect = useCallback(
+    (d: string, c: string) => {
+      // fresh primary: drop everything and start over
+      handlesRef.current.forEach((h) => h.destroy());
+      handlesRef.current.clear();
+      setChans([]);
+      setAvailable([]);
+      addChannel(d, c);
+    },
+    [addChannel],
+  );
+
+  // The console knows every channel's proper name — adopt it once announced.
+  useEffect(() => {
+    if (!available.length) return;
+    setChans((cs) =>
+      cs.map((x) => {
+        const ad = available.find((a) => a.d === x.d && a.c === x.c);
+        return ad && ad.label !== x.label ? { ...x, label: ad.label } : x;
+      }),
+    );
+  }, [available]);
+
+  /** every connected channel — the big pad / camera / accelerometer */
+  const send = useCallback((c: Control) => {
+    for (const h of handlesRef.current.values()) h.send(c);
+    if (c.t === 'motion') sentRef.current++;
+  }, []);
+  /** one channel — its strip in the multi-channel view */
+  const sendTo = useCallback((key: number, c: Control) => {
+    handlesRef.current.get(key)?.send(c);
+    if (c.t === 'motion') sentRef.current++;
+  }, []);
 
   // Periodically report how many motion frames have been sent — so the log shows
   // whether data is actually leaving the phone.
@@ -60,11 +131,18 @@ export default function Controller() {
   // Auto-connect when the QR prefilled both fields.
   useEffect(() => {
     if (deviceId && code) connect(deviceId, code);
-    return () => linkRef.current?.destroy();
+    const handles = handlesRef.current;
+    return () => {
+      handles.forEach((h) => h.destroy());
+      handles.clear();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const status: LinkStatus = chans[0]?.status ?? 'idle';
   const connected = status === 'peer';
+  const liveCount = chans.filter((x) => x.status === 'peer').length;
+  const freeAds = available.filter((a) => a.peers === 0 && !chans.some((x) => x.d === a.d && x.c === a.c));
 
   // --- Motion pad: drag speed → 0..1 motion, sent ~30fps, 0 on release. -------
   const padState = useRef({ active: false, x: 0, y: 0, t: 0, last: 0 });
@@ -253,9 +331,74 @@ export default function Controller() {
           Wing Beat <small>controller</small>
         </span>
         <span className="wb-cam-status" style={{ margin: 0 }}>
-          <span className="wb-dot connected" /> connected
+          <span className="wb-dot connected" /> {chans.length > 1 ? `${liveCount}/${chans.length} channels` : 'connected'}
         </span>
+        <button className="wb-btn wb-ctl-add" title="control another channel" onClick={() => setShowAdd((v) => !v)}>
+          ＋
+        </button>
       </div>
+
+      {showAdd && (
+        <div className="wb-ctl-section wb-ctl-addbox">
+          <div className="wb-label">Add a channel</div>
+          {freeAds.length > 0 ? (
+            <div className="wb-ctl-freechans">
+              {freeAds.map((a) => (
+                <button
+                  key={`${a.d}-${a.c}`}
+                  className="wb-btn"
+                  onClick={() => {
+                    addChannel(a.d, a.c, a.label);
+                    setShowAdd(false);
+                  }}
+                >
+                  ＋ {a.label}
+                  {a.kind === 'group' ? ' · group' : ''}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="wb-settings-note" style={{ margin: 0 }}>
+              no free channels announced yet — every channel is taken, or enter codes by hand:
+            </div>
+          )}
+          <div className="wb-ctl-row">
+            <input className="wb-input" placeholder="DEVICE" value={addD} maxLength={8} autoCapitalize="characters" onChange={(e) => setAddD(e.target.value.toUpperCase())} />
+            <input className="wb-input" placeholder="CODE" value={addC} maxLength={8} autoCapitalize="characters" onChange={(e) => setAddC(e.target.value.toUpperCase())} />
+            <button
+              className="wb-btn accent"
+              onClick={() => {
+                addChannel(addD, addC);
+                setAddD('');
+                setAddC('');
+                setShowAdd(false);
+              }}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+      )}
+
+      {chans.length > 1 && (
+        <div className="wb-ctl-section">
+          <div className="wb-ctl-slider-head">
+            <span className="wb-label">Channels — hold a strip to blow on it</span>
+            <span className="wb-motion-val">{chans.length}</span>
+          </div>
+          <div className="wb-ctl-strips">
+            {chans.map((ch) => (
+              <ChannelStrip
+                key={ch.key}
+                label={ch.label}
+                status={ch.status}
+                onLevel={(v) => sendTo(ch.key, { t: 'motion', v })}
+                onRemove={() => removeChannel(ch.key)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div
         className="wb-ctl-pad"
@@ -266,7 +409,9 @@ export default function Controller() {
         onPointerCancel={camOn ? undefined : onPadUp}
       >
         <canvas ref={camCanvasRef} className="wb-ctl-cam" style={{ display: camOn ? 'block' : 'none' }} />
-        <span className="wb-ctl-pad-label">{camOn ? 'camera — wave in front of the phone' : tilt ? 'shake the phone' : 'swipe / wave here'}</span>
+        <span className="wb-ctl-pad-label">
+          {camOn ? 'camera — wave in front of the phone' : tilt ? 'shake the phone' : chans.length > 1 ? 'swipe / wave here — all channels' : 'swipe / wave here'}
+        </span>
         <div className="wb-level" style={{ maxWidth: 260 }}>
           <div className="wb-level-fill" style={{ width: `${Math.round(padLevel * 100)}%`, background: 'linear-gradient(90deg,#7c3aed,#c4a8ff)' }} />
         </div>
@@ -362,6 +507,59 @@ export default function Controller() {
       </div>
 
       {logPanel}
+    </div>
+  );
+}
+
+// A vertical touch fader for one channel: finger height = wind level, release
+// = 0. Each strip has its own pointer capture, so several fingers can play
+// several channels at once.
+function ChannelStrip({
+  label,
+  status,
+  onLevel,
+  onRemove,
+}: {
+  label: string;
+  status: LinkStatus;
+  onLevel: (v: number) => void;
+  onRemove?: () => void;
+}) {
+  const [lvl, setLvl] = useState(0);
+  const last = useRef(0);
+  const set = (v: number) => {
+    setLvl(v);
+    onLevel(v);
+  };
+  const fromEvent = (e: React.PointerEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    return clamp01(1 - (e.clientY - r.top) / Math.max(1, r.height));
+  };
+  return (
+    <div
+      className={`wb-ctl-strip ${status === 'peer' ? 'live' : ''}`}
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+        set(fromEvent(e));
+      }}
+      onPointerMove={(e) => {
+        if (!e.currentTarget.hasPointerCapture?.(e.pointerId)) return;
+        const now = performance.now();
+        if (now - last.current < 33) return; // ~30 fps to the console
+        last.current = now;
+        set(fromEvent(e));
+      }}
+      onPointerUp={() => set(0)}
+      onPointerCancel={() => set(0)}
+    >
+      <div className="wb-ctl-strip-fill" style={{ height: `${Math.round(lvl * 100)}%` }} />
+      <span className="wb-ctl-strip-label">{label}</span>
+      <span className={`wb-dot ${status === 'peer' ? 'connected' : status === 'error' ? 'error' : 'connecting'}`} />
+      {onRemove && (
+        <button className="wb-ctl-strip-x" title="remove channel" onPointerDown={(e) => e.stopPropagation()} onClick={onRemove}>
+          ✕
+        </button>
+      )}
     </div>
   );
 }
