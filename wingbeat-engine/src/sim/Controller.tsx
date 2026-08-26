@@ -151,12 +151,17 @@ export default function Controller() {
   const liveCount = chans.filter((x) => x.status === 'peer').length;
   const freeAds = available.filter((a) => a.peers === 0 && !chans.some((x) => x.d === a.d && x.c === a.c));
 
-  // --- Motion pad: drag speed → 0..1 motion, sent ~30fps, 0 on release. -------
-  //     The SAME surface is the FX matrix: finger POSITION picks the effect
-  //     (TL delay · TR reverb · BL high-pass · BR low-pass, center = dry,
-  //     distance = amount) while finger SPEED keeps blowing wind — one hand
-  //     plays both layers at once.
-  const padState = useRef({ active: false, x: 0, y: 0, t: 0, last: 0 });
+  // --- Motion pad: HOLD to play, swipe for extra energy. ----------------------
+  //     A held finger sustains a steady level (the loops keep playing — no
+  //     movement required, so parking on the matrix center holds the music
+  //     dry); swiping pushes above it. The SAME surface is the FX matrix:
+  //     finger POSITION picks the effect (TL delay · TR reverb · BL high-pass
+  //     · BR low-pass, center = dry, distance = amount) — one hand plays both
+  //     layers at once. A steady ticker sends while held, because a still
+  //     finger produces no pointer events at all.
+  const HOLD_LEVEL = 0.7;
+  const padState = useRef({ active: false, x: 0, y: 0, t: 0, speed: 0, fx: { x: 0, y: 0 } });
+  const padTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [padLevel, setPadLevel] = useState(0);
   const [fxPos, setFxPos] = useState<{ x: number; y: number } | null>(null);
 
@@ -172,38 +177,53 @@ export default function Controller() {
       y: Math.max(-1, Math.min(1, 1 - ((e.clientY - r.top) / Math.max(1, r.height)) * 2)),
     };
   };
-  const emitFx = (pos: { x: number; y: number } | null) => {
-    setFxPos(pos);
-    sendPrimary(pos ? { t: 'fx', x: pos.x, y: pos.y, on: true } : { t: 'fx', x: 0, y: 0, on: false });
+
+  const padTick = () => {
+    const s = padState.current;
+    if (!s.active) return;
+    // swipe energy leaks away (~0.25 s), the hold floor stays
+    s.speed *= Math.exp(-0.066 / 0.25);
+    emitMotion(clamp01(Math.max(HOLD_LEVEL, s.speed)));
+    setFxPos({ ...s.fx });
+    sendPrimary({ t: 'fx', x: s.fx.x, y: s.fx.y, on: true });
   };
 
   const onPadDown = (e: React.PointerEvent) => {
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const now = performance.now();
-    padState.current = { active: true, x: e.clientX, y: e.clientY, t: now, last: now };
-    emitMotion(0.15);
-    emitFx(fxFrom(e));
+    padState.current = { active: true, x: e.clientX, y: e.clientY, t: now, speed: 0, fx: fxFrom(e) };
+    if (padTimer.current) clearInterval(padTimer.current);
+    padTimer.current = setInterval(padTick, 66);
+    padTick();
   };
   const onPadMove = (e: React.PointerEvent) => {
     const s = padState.current;
     if (!s.active) return;
     const now = performance.now();
     const dt = Math.max(1, now - s.t);
-    const dist = Math.hypot(e.clientX - s.x, e.clientY - s.y);
-    const speed = dist / dt; // px per ms
+    const inst = (Math.hypot(e.clientX - s.x, e.clientY - s.y) / dt) * 0.9; // px/ms → 0..1-ish
+    s.speed = Math.max(s.speed, clamp01(inst)); // instant attack, the ticker releases
     s.x = e.clientX;
     s.y = e.clientY;
     s.t = now;
-    if (now - s.last < 33) return; // throttle ~30fps
-    s.last = now;
-    emitMotion(clamp01(speed * 0.9));
-    emitFx(fxFrom(e));
+    s.fx = fxFrom(e);
   };
   const onPadUp = () => {
     padState.current.active = false;
+    if (padTimer.current) clearInterval(padTimer.current);
+    padTimer.current = null;
     emitMotion(0);
-    emitFx(null);
+    setFxPos(null);
+    sendPrimary({ t: 'fx', x: 0, y: 0, on: false });
   };
+
+  // never leave a stuck note if the page unmounts mid-hold
+  useEffect(
+    () => () => {
+      if (padTimer.current) clearInterval(padTimer.current);
+    },
+    [],
+  );
 
   const [tilt, setTilt] = useState(false); // accelerometer on
   const [tiltThreshold, setTiltThreshold] = useState(1); // m/s^2 of shake ignored as noise
@@ -457,8 +477,8 @@ export default function Controller() {
             : tilt
               ? 'shake the phone'
               : chans.length > 1
-                ? 'swipe = wind (all channels) · hold toward a corner = fx'
-                : 'swipe = wind · hold toward a corner = fx'}
+                ? 'hold to play (all channels) · corners = fx · swipe = extra'
+                : 'hold to play · corners = fx · swipe = extra'}
         </span>
         <div className="wb-level" style={{ maxWidth: 260 }}>
           <div className="wb-level-fill" style={{ width: `${Math.round(padLevel * 100)}%`, background: 'linear-gradient(90deg,#7c3aed,#c4a8ff)' }} />
