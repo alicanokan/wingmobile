@@ -25,7 +25,7 @@ import { getScene } from '../engine/scenes.ts';
 import type { WingbeatEngine } from '../engine/WingbeatEngine.ts';
 import type { LedCommand, NodeId } from '../engine/types.ts';
 import type { LedArbiter, LedWire } from '../led/types.ts';
-import { QOS, parseJson, parseLedCmd, parseStatus, parseTopic, topics, type AudioCmdWire, type GlobalAction, type SceneWire } from '../protocol/wire.ts';
+import { QOS, parseJson, parseLedCmd, parseSensorValue, parseStatus, parseTopic, topics, type AudioCmdWire, type GlobalAction, type SceneWire } from '../protocol/wire.ts';
 
 export interface MqttOptions {
   /** e.g. ws://10.0.0.4:9001 — the Mosquitto WebSocket listener. */
@@ -203,9 +203,15 @@ export class MqttTransport extends BaseTransport {
     if (t.kind === 'status') {
       this.engine.ingestStatus(t.id, parseStatus(payload));
     } else if (t.kind === 'sensor') {
-      if (t.sensor === 'wind') this.engine.ingestWind(t.id, Number(payload.v ?? 0));
-      else if (t.sensor === 'motion') this.engine.ingestMotion(t.id, Number(payload.mag ?? 0));
-      else if (t.sensor === 'presence') this.engine.ingestPresence(t.id, Boolean(payload.present));
+      if (t.sensor === 'wind') {
+        const v = parseSensorValue(payload.v);
+        if (v !== null) this.engine.ingestWind(t.id, v);
+      } else if (t.sensor === 'motion') {
+        const mag = parseSensorValue(payload.mag);
+        if (mag !== null) this.engine.ingestMotion(t.id, mag);
+      } else if (t.sensor === 'presence') {
+        this.engine.ingestPresence(t.id, Boolean(payload.present));
+      }
     }
   }
 

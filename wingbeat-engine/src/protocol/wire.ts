@@ -154,6 +154,14 @@ export function parseStatus(p: Record<string, unknown>): StatusWire {
 const num = (v: unknown, fallback = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
 const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v);
 
+/** Coerces a sensor payload field to a finite number; returns null for
+ *  anything that isn't (NaN/Infinity/non-numeric junk) so a malformed
+ *  packet is dropped instead of poisoning node state. */
+export function parseSensorValue(v: unknown, fallback = 0): number | null {
+  const n = Number(v ?? fallback);
+  return Number.isFinite(n) ? n : null;
+}
+
 export function parseLedCmd(p: Record<string, unknown>): LedCmdWire | null {
   if (!isLedMode(p.mode)) return null;
   const src = p.src === 'engine' || p.src === 'router' || p.src === 'identify' ? p.src : undefined;

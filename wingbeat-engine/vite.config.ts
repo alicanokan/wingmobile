@@ -46,19 +46,24 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        // three.js is by far the heaviest dependency and it never changes
-        // between deploys. Splitting it (and React) off means a visitor who
-        // has been here before only re-downloads the app code, and the app
-        // chunk stays small enough to parse quickly on a phone.
         // Assigned by module path rather than by package name: the name form
         // puts a shared dependency in whichever group claimed it first, which
         // buried react-dom inside the r3f chunk and left `react` empty.
+        //
+        // three/@react-three are deliberately NOT manually named here. Now
+        // that main.tsx loads every route via React.lazy(), Vite's shared
+        // dynamic-import helper gets bundled into whichever manual chunk it
+        // first associates with — and naming three/r3f made it land there,
+        // so the entry statically imported that chunk and every route (even
+        // /controller, which never touches 3D) paid for downloading three.js
+        // up front, silently undoing the route split. Left to Rollup's own
+        // chunking, the helper lands in `react` instead (already required by
+        // every route, so it's free), and three+@react-three merge into one
+        // auto-named chunk that only the routes actually rendering the 3D
+        // feather (/, /feather, /feather2, /conductor, /experience) fetch.
+        // Verified: /controller and /cam pull in neither three nor r3f.
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
-          if (id.includes('/three/')) return 'three';
-          // kept apart from `three`: /feather2 drives raw three.js and has no
-          // reason to pull the react-three wrappers down with it
-          if (id.includes('@react-three')) return 'r3f';
           if (/\/(react|react-dom|scheduler)\//.test(id)) return 'react';
           if (id.includes('/tone/')) return 'audio';
           if (/\/(mqtt|peerjs|qrcode)|@supabase/.test(id)) return 'net';

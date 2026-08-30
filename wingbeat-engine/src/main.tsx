@@ -1,13 +1,14 @@
-import { StrictMode, type ReactNode } from 'react';
+import { StrictMode, Suspense, lazy, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
-import App from './sim/App.tsx';
-import FeatherView from './sim/FeatherView.tsx';
-import CamSender from './sim/CamSender.tsx';
-import Controller from './sim/Controller.tsx';
-import Conductor from './sim/Conductor.tsx';
-import Experience from './sim/Experience.tsx';
-import Feather2 from './feather2/Feather2.tsx';
 import { ErrorBoundary } from './sim/ErrorBoundary.tsx';
+
+const App = lazy(() => import('./sim/App.tsx'));
+const FeatherView = lazy(() => import('./sim/FeatherView.tsx'));
+const CamSender = lazy(() => import('./sim/CamSender.tsx'));
+const Controller = lazy(() => import('./sim/Controller.tsx'));
+const Conductor = lazy(() => import('./sim/Conductor.tsx'));
+const Experience = lazy(() => import('./sim/Experience.tsx'));
+const Feather2 = lazy(() => import('./feather2/Feather2.tsx'));
 
 // Entry points on one app: the operator console (/), a display-only projection
 // (/feather) for a second screen, a phone camera sender (/cam), a phone
@@ -58,19 +59,41 @@ function NotFound() {
   );
 }
 
+function RouteFallback() {
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#0b0a09',
+        color: '#e9e3d7',
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: 14,
+        opacity: 0.7,
+      }}
+    >
+      loading…
+    </div>
+  );
+}
+
 const route = ROUTES[path];
 const label = route?.label ?? 'console';
 
 createRoot(document.getElementById('root')!).render(
   <ErrorBoundary label={label}>
-    {route ? (
-      route.el()
-    ) : path === '' || path === '/' ? (
-      <StrictMode>
-        <App />
-      </StrictMode>
-    ) : (
-      <NotFound />
-    )}
+    <Suspense fallback={<RouteFallback />}>
+      {route ? (
+        route.el()
+      ) : path === '' || path === '/' ? (
+        <StrictMode>
+          <App />
+        </StrictMode>
+      ) : (
+        <NotFound />
+      )}
+    </Suspense>
   </ErrorBoundary>,
 );

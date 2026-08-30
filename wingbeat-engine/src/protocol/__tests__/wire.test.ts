@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseTopic, parseLedCmd, parseStatus, topics, WIRE_DOC, LED_MODES } from '../wire.ts';
+import { parseTopic, parseLedCmd, parseSensorValue, parseStatus, topics, WIRE_DOC, LED_MODES } from '../wire.ts';
 
 describe('parseTopic', () => {
   it('classifies every topic the builders produce', () => {
@@ -23,6 +23,17 @@ describe('payload parsers', () => {
     expect(parseLedCmd({ mode: 'solid', r: 300, g: -4, b: 12.6, intensity: 2, src: 'router' })).toEqual({ mode: 'solid', r: 255, g: 0, b: 13, intensity: 1, src: 'router' });
     expect(parseLedCmd({ mode: 'disco' })).toBeNull();
     expect(parseLedCmd({ mode: 'off', src: 'hacker' })!.src).toBeUndefined();
+  });
+  it('coerces sensor values but drops non-finite junk', () => {
+    expect(parseSensorValue(0.42)).toBe(0.42);
+    expect(parseSensorValue('0.7')).toBe(0.7);
+    expect(parseSensorValue(undefined)).toBe(0);
+    expect(parseSensorValue(null)).toBe(0);
+    expect(parseSensorValue(undefined, 0.5)).toBe(0.5);
+    expect(parseSensorValue('banana')).toBeNull();
+    expect(parseSensorValue(NaN)).toBeNull();
+    expect(parseSensorValue(Infinity)).toBeNull();
+    expect(parseSensorValue({})).toBeNull();
   });
   it('reads status leniently', () => {
     expect(parseStatus({ online: false, role: 'feather', rssi: -60 })).toEqual({ online: false, role: 'feather', fw: undefined, rssi: -60, ip: undefined });
