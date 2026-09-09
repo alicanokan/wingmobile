@@ -144,6 +144,12 @@ export default function App() {
       : null;
   });
   const [theme, toggleTheme] = useTheme();
+  // Visitors on a phone hear the loops, not the engine's generative pulse
+  // (the bell / pluck / drum that ticks under every gesture). The console
+  // keeps its own switch.
+  useEffect(() => {
+    if (entryMode === 'mobile') engine.setPatterns(false);
+  }, [entryMode, engine]);
   // Keep `?mode=` in step with the chosen door, so a refresh (or a shared
   // link like /?mode=mobile) lands back in the same experience.
   useEffect(() => {

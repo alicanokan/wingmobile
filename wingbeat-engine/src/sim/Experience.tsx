@@ -44,6 +44,7 @@ type Sheet = 'feather' | 'presets' | 'control' | 'mix' | 'play' | null;
 type Renderer = 'living' | 'classic';
 const RENDERER_KEY = 'wb.xpRenderer.v1';
 const PLAY_KEY = 'wb.xpPlay.v1';
+const PULSE_KEY = 'wb.xpPulse.v1';
 /** Level of a simulated held finger — the phone pad's own hold level. */
 const TEST_HOLD_LEVEL = 0.7;
 
@@ -188,6 +189,15 @@ export default function Experience() {
   useEffect(() => {
     audio.setLayerMute('bed', true);
   }, [audio]);
+
+  // The engine's GENERATIVE PULSE — a bell on presence, a pluck on each wind
+  // crest, a drum on motion — ticks like a metronome under every gesture. On
+  // this page the loops are the sound, so it is off unless switched on in Mix.
+  const [pulse, setPulse] = useState(() => loadJson(PULSE_KEY, (raw) => raw === true));
+  useEffect(() => {
+    engine.setPatterns(pulse);
+    saveJson(PULSE_KEY, pulse);
+  }, [engine, pulse]);
 
   // ---- phone controllers: one host per slot, slot i drives part i ---------
   const linksRef = useRef<HostHandle[]>([]);
@@ -643,6 +653,16 @@ export default function Experience() {
               onChange={(e) => setMasterGain(parseFloat(e.target.value))}
             />
             <span className="xp-fader-val">{masterGain.toFixed(2)}</span>
+          </div>
+
+          <div className="xp-pulse">
+            <button className={`xp-mute ${pulse ? 'on' : ''}`} title={pulse ? 'switch the generative pulse off' : 'switch the generative pulse on'} onClick={() => setPulse((v) => !v)}>
+              {pulse ? '●' : '·'}
+            </button>
+            <span className="xp-fader-name">
+              Generative pulse
+              <i>{pulse ? 'bell · pluck · drum on gestures' : 'off — loops only'}</i>
+            </span>
           </div>
 
           {!audioReady && <div className="xp-note">press Begin — the loops load with the audio engine</div>}

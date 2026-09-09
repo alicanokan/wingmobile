@@ -542,3 +542,7 @@
 }
 .xp-subhead { margin: 22px 0 10px; display: flex; align-items: baseline; gap: 10px; font-weight: 300; font-size: 14px; letter-spacing: 0.2em; text-transform: uppercase; color: #e8e8e8; }
 .xp-subhead em { font-style: normal; font-size: 9px; letter-spacing: 0.26em; color: #8a8a98; }
+
+/* ---- generative pulse switch (Mix) -------------------------------------- */
+.xp-pulse { display: flex; align-items: center; gap: 12px; padding: 6px 0 12px; margin-bottom: 8px; border-bottom: 1px solid #1f1f2a; }
+.xp-pulse .xp-mute.on { background: var(--xp-mix); color: #06060a; border-color: var(--xp-mix); }
