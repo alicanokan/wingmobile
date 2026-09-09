@@ -18,6 +18,7 @@
 import { BaseTransport } from './Transport.ts';
 import { LAYOUT } from '../engine/spatial.ts';
 import type { WingbeatEngine } from '../engine/WingbeatEngine.ts';
+import type { InputSource } from '../engine/types.ts';
 
 export class SimTransport extends BaseTransport {
   readonly kind = 'sim' as const;
@@ -29,7 +30,7 @@ export class SimTransport extends BaseTransport {
 
   // Continuous wind values (e.g. from mic / held mouse) that we re-emit at a
   // steady rate so the wind layer stays alive, mirroring a real sensor's 20 Hz.
-  private held = new Map<string, number>();
+  private held = new Map<string, { value: number; source: InputSource }>();
   private heldTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(opts: { autoDemo?: boolean } = {}) {
@@ -49,10 +50,11 @@ export class SimTransport extends BaseTransport {
     // Re-emit held wind values at ~20 Hz (matches firmware WIND_PUBLISH_HZ).
     this.heldTimer = setInterval(() => {
       if (!this.engine) return;
-      for (const [id, v] of this.held) this.engine.ingestWind(id, v);
+      for (const [id, held] of this.held) this.engine.ingestWind(id, held.value, held.source);
     }, 50);
 
-    this.staleTimer = setInterval(() => engine.tickStaleness(), 2000);
+    // Fixed-step encounter model keeps recovering after the input itself stops.
+    this.staleTimer = setInterval(() => engine.tick(), 50);
 
     if (this.autoDemo) this.startAutoDemo();
   }
@@ -69,26 +71,26 @@ export class SimTransport extends BaseTransport {
   // ---- Manual / mic input ------------------------------------------------
 
   /** One-shot or instantaneous wind value for a node, 0..1. */
-  blow(id: string, intensity: number) {
-    this.engine?.ingestWind(id, intensity);
+  blow(id: string, intensity: number, source: InputSource = 'simulation') {
+    this.engine?.ingestWind(id, intensity, source);
   }
 
   /** Hold a continuous wind value on a node (mic level, or mouse held down). */
-  holdWind(id: string, intensity: number) {
+  holdWind(id: string, intensity: number, source: InputSource = 'simulation') {
     if (intensity <= 0.001) this.held.delete(id);
-    else this.held.set(id, Math.min(1, intensity));
+    else this.held.set(id, { value: Math.min(1, intensity), source });
   }
-  releaseWind(id: string) {
+  releaseWind(id: string, source: InputSource = 'simulation') {
     this.held.delete(id);
-    this.engine?.ingestWind(id, 0);
+    this.engine?.ingestWind(id, 0, source);
   }
 
-  shake(id: string, mag: number) {
-    this.engine?.ingestMotion(id, mag);
+  shake(id: string, mag: number, source: InputSource = 'simulation') {
+    this.engine?.ingestMotion(id, mag, source);
   }
 
-  setPresence(id: string, present: boolean) {
-    this.engine?.ingestPresence(id, present);
+  setPresence(id: string, present: boolean, source: InputSource = 'simulation') {
+    this.engine?.ingestPresence(id, present, source);
   }
 
   // ---- Auto demo ---------------------------------------------------------

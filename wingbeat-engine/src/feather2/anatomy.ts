@@ -14,11 +14,12 @@
 //    (mostly firm vane) from a contour, semiplume or down feather.
 //
 //  Recovery from a photo:
-//    1. mask the feather — flood fill the background inward from the border,
-//       so dark regions inside a dark feather aren't eaten as background
+//    1. form the silhouette — row-edge studio plate, flood from the border,
+//       then close hairline vane gaps. Dark enclosed pigment stays. Large
+//       cut-outs and downy spacing stay open.
 //    2. PCA → shaft axis; the width profile puts the narrow end (calamus) at v=0
 //    3. the SHAFT RIDGE: the rachis is found as a thin luminance ridge and fit
-//       as a straight line, because on an asymmetric flight feather the shaft
+//       as a continuous curve, because on an asymmetric flight feather the shaft
 //       is nowhere near the centre of area. Each vane half is then normalised
 //       by its OWN width → u -1..1 across, v 0..1 base→tip.
 //    4. per-band SOLIDITY (mask fill inside the width envelope) → the downy
@@ -39,6 +40,15 @@
 // ============================================================================
 
 import { findPatterns } from './patterns.ts';
+import {
+  closeSmallRowGaps,
+  estimateRowBackground,
+  floodFromBorder,
+  formSeed,
+  formedRestZ,
+  matchesRowPlate,
+  readFormedColor,
+} from './form.ts';
 
 export const PART = {
   calamus: 0,
@@ -60,14 +70,24 @@ export interface PatternZone {
 }
 
 export interface Anatomy {
+  photoPoints?: { uv: Float32Array; basis: number[]; footprint: number; worldSize: number };
+  photoSurface?: { positions: Float32Array; nearest: Uint32Array; mask: Uint8Array; width: number; height: number; columns: number; rows: number };
   count: number;
   pos: Float32Array; // 2 per particle, feather-local (x right, y up; calamus y≈-1)
+  /** Rest-space thickness from the photo forming pass. Shader motion adds on top. */
+  formZ: Float32Array;
+  /** Measured shaft x at each particle height; positions retain the photo curve. */
+  shaftX?: Float32Array;
+  /** Diagnostic centreline in source-image pixels. */
+  shaftTrace?: Float32Array;
   rgb: Float32Array; // 3 per particle
   uv: Float32Array; // 2 per particle: u -1..1 across, v 0..1 along
   part: Float32Array; // PART.* per particle
   downy: Float32Array; // 0 firm pennaceous … 1 loose plumulaceous (structural)
   barb: Float32Array; // 2 per particle: unit barb tangent in feather-local space
   cluster: Float32Array;
+  /** Stable detected marking index per point, -1 for plain vane. */
+  pattern: Float32Array;
   /**
    * 4 per particle — the SURFACE fields, measured from the photo:
    *   x  core   0 at the silhouette rim … 1 deep inside the vane
@@ -90,14 +110,14 @@ export interface Anatomy {
   plumFrac: number; // fraction of the vane that is downy
 }
 
-const ANALYSIS_LONG_SIDE = 560; // also the particle source — higher = denser cloud
+const ANALYSIS_LONG_SIDE = 960; // source raster at the default 140k target
 const TARGET_PARTICLES = 140_000;
 const K = 6; // colour groups for the melody recolour (colour only, no position)
 const KMEANS_TRAIN_STRIDE = 3;
 const MAX_ZONES = 260; // markings kept — a barred feather has many
 const BINS = 48;
 const BARB_SWEEP = 0.42; // how much barbs lean toward the tip (tan of the angle)
-const PROF = 41; // across-profile resolution used to hunt the rachis ridge
+const PROF = 161; // across-profile resolution used to hunt the rachis ridge
 
 export async function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -112,13 +132,19 @@ export async function loadImage(src: string): Promise<HTMLImageElement> {
 export interface AnalyzeOptions {
   /** pattern-scan sensitivity, 0 strict … 1 fine; 0.5 = default */
   sensitivity?: number;
+  /** Approximate upper bound for source pixels retained in the cloud. */
+  particleCount?: number;
+  shaftGuide?: number[][];
 }
 
-export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {}): Anatomy {
-  const sensitivity = Math.max(0, Math.min(1, opts.sensitivity ?? 0.5));
+export function readFeatherPixels(img: HTMLImageElement, particleCount = 140_000): ImageData {
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
-  const scale = ANALYSIS_LONG_SIDE / Math.max(iw, ih);
+  const requested = Math.max(24_000, Math.min(500_000, particleCount));
+  // More source pixels are needed before sampling can produce a denser cloud.
+  // Keep this bounded: the worker still has to run flood fill and tensor scans.
+  const longSide = Math.round(ANALYSIS_LONG_SIDE * Math.sqrt(requested / 140_000));
+  const scale = longSide / Math.max(iw, ih);
   const w = Math.max(8, Math.round(iw * scale));
   const h = Math.max(8, Math.round(ih * scale));
 
@@ -127,7 +153,19 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   canvas.height = h;
   const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
   ctx.drawImage(img, 0, 0, w, h);
-  const data = ctx.getImageData(0, 0, w, h).data;
+  return ctx.getImageData(0, 0, w, h);
+}
+
+export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {}): Anatomy {
+  return analyzePixels(readFeatherPixels(img, opts.particleCount), opts);
+}
+
+/** Pure raster analysis; also runs in a worker so scans never stop the stage. */
+export function analyzePixels(image: Pick<ImageData, 'width' | 'height' | 'data'>, opts: AnalyzeOptions = {}): Anatomy {
+  const sensitivity = Math.max(0, Math.min(1, opts.sensitivity ?? 0.5));
+  const particleTarget = Math.max(24_000, Math.min(500_000, Math.round(opts.particleCount ?? TARGET_PARTICLES)));
+  const { width: w, height: h, data } = image;
+  if (w < 8 || h < 8 || data.length !== w * h * 4) throw new Error('The image is too small to analyse.');
 
   // ---- 1. mask ------------------------------------------------------------
   let hasAlpha = false;
@@ -151,6 +189,15 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   };
   const corners = [corner(0, 0), corner(w - 6, 0), corner(0, h - 6), corner(w - 6, h - 6)];
   const bg = [0, 1, 2].map((c) => (corners[0][c] + corners[1][c] + corners[2][c] + corners[3][c]) / 4);
+  const blackBackground = Math.max(...bg) < 0.055;
+  // On a true black studio plate, colour-distance flood fill is too generous:
+  // a dark red or brown barb is numerically close to black and remains
+  // connected to the frame through its anti-aliased edge. Keep only pixels
+  // that are actually near black in that case. This preserves low-luminance
+  // feather pigment while still removing black/JPEG edge noise.
+  const blackCut = Math.max(0.025, Math.min(0.07, Math.max(...bg) + 0.018));
+  const rowBg = estimateRowBackground(data, w, h);
+  const plateThreshold = blackBackground ? blackCut * 255 : 28;
 
   // Background by FLOOD FILL FROM THE BORDER, not by a per-pixel colour test.
   // A dark feather on a dark ground has regions that look like background in
@@ -159,6 +206,9 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   // region CONNECTED to the edge of the frame, so fill inward from the border
   // and keep everything the fill can't reach. Interior darks survive because
   // they are enclosed by feather.
+  //
+  // Higgsfield's row-edge plate is layered on top: grey studio falloff at the
+  // frame matches the local edge even when it is brighter than a global cut.
   const bgLike = new Uint8Array(w * h);
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
@@ -167,37 +217,20 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
         bgLike[y * w + x] = data[i + 3] < 100 ? 1 : 0;
       } else {
         const r = data[i] / 255, g = data[i + 1] / 255, b = data[i + 2] / 255;
-        const d = Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]);
-        bgLike[y * w + x] = d < 0.30 ? 1 : 0; // deliberately loose
+        const plate = matchesRowPlate(data, w, y * w + x, rowBg, plateThreshold);
+        if (blackBackground) {
+          // Plate matching only lifts the cut a little — enough for grey JPEG
+          // halos, not enough to flood a charcoal vane into the studio black.
+          bgLike[y * w + x] = Math.max(r, g, b) < blackCut || (plate && Math.max(r, g, b) < 0.11) ? 1 : 0;
+        } else {
+          const d = Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]);
+          bgLike[y * w + x] = d < 0.30 || plate ? 1 : 0;
+        }
       }
     }
-  const isBg = new Uint8Array(w * h);
-  {
-    const q = new Int32Array(w * h);
-    let head = 0, tail = 0;
-    const push = (x: number, y: number) => {
-      const k = y * w + x;
-      if (isBg[k] || !bgLike[k]) return;
-      isBg[k] = 1;
-      q[tail++] = k;
-    };
-    for (let x = 0; x < w; x++) {
-      push(x, 0);
-      push(x, h - 1);
-    }
-    for (let y = 0; y < h; y++) {
-      push(0, y);
-      push(w - 1, y);
-    }
-    while (head < tail) {
-      const k = q[head++];
-      const x = k % w, y = (k / w) | 0;
-      if (x > 0) push(x - 1, y);
-      if (x < w - 1) push(x + 1, y);
-      if (y > 0) push(x, y - 1);
-      if (y < h - 1) push(x, y + 1);
-    }
-  }
+  const isBg = floodFromBorder(bgLike, w, h);
+  const filled = new Uint8Array(w * h);
+  closeSmallRowGaps(isBg, w, h, filled);
 
   const gridIdx = new Int32Array(w * h).fill(-1);
   const xs: number[] = [];
@@ -275,8 +308,12 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
       cnt[b]++;
     }
     const half = new Float32Array(BINS);
-    for (let b = 0; b < BINS; b++) half[b] = cnt[b] ? (hi[b] - lo[b]) / 2 : 0;
-    return { half, cnt };
+    const mid = new Float32Array(BINS);
+    for (let b = 0; b < BINS; b++) {
+      half[b] = cnt[b] ? (hi[b] - lo[b]) / 2 : 0;
+      mid[b] = cnt[b] ? (hi[b] + lo[b]) / 2 : 0;
+    }
+    return { half, mid, cnt };
   };
   const byAlong = bandW((i) => Math.min(BINS - 1, Math.floor(((along[i] - aMin) / aSpan) * BINS)));
   const endW = (from: number, to: number) => {
@@ -296,12 +333,16 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   // width + solidity re-binned in v (so bin 0 = calamus end)
   const byV = bandW((i) => Math.min(BINS - 1, Math.floor(v[i] * BINS)));
   const halfW = byV.half; // half-width envelope, measured inside each band
+  const midW = byV.mid;
   const binCnt = byV.cnt;
   // smooth the envelope a touch
   const halfWS = new Float32Array(BINS);
+  const midWS = new Float32Array(BINS);
   for (let b = 0; b < BINS; b++) {
     const a = halfW[Math.max(0, b - 1)], c = halfW[Math.min(BINS - 1, b + 1)];
     halfWS[b] = Math.max(2, (a + halfW[b] + c) / 3);
+    const ma = midW[Math.max(0, b - 1)], mc = midW[Math.min(BINS - 1, b + 1)];
+    midWS[b] = (ma + midW[b] + mc) / 3;
   }
   // ---- 3b. CALAMUS: the narrow bare quill at the base ---------------------
   // Found before anything else that talks about the vane, because a bare quill
@@ -318,6 +359,23 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   }
   const calTopV = (calTopBin + 1) / BINS;
   const vaneFrom = Math.min(BINS - 1, calTopBin + 1);
+  // The bare calamus is the most reliable shaft observation in the image.
+  // Anchor the rachis fit to the midpoint of those narrow base bands rather
+  // than to the feather's area centroid (which shifts toward the wider vane).
+  let shaftAnchor = 0, shaftAnchorBands = 0;
+  for (let b = 0; b <= calTopBin; b++) {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < n; i++) {
+      if (Math.min(BINS - 1, Math.floor(v[i] * BINS)) !== b) continue;
+      lo = Math.min(lo, across[i]);
+      hi = Math.max(hi, across[i]);
+    }
+    if (Number.isFinite(lo) && Number.isFinite(hi)) {
+      shaftAnchor += (lo + hi) * 0.5;
+      shaftAnchorBands++;
+    }
+  }
+  shaftAnchor /= shaftAnchorBands || 1;
 
   // SOLIDITY per bin: how filled the mask is inside its width envelope.
   // firm pennaceous vane ≈ 1; loose downy barbs leave gaps ≈ 0.3–0.5. Measured
@@ -338,8 +396,7 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   // the area centre: centring the UV on the centroid puts the "rachis" band out
   // in the vane and normalises both halves by the wrong width. So look for the
   // shaft the way an eye does — a narrow luminance RIDGE near the middle of
-  // each band — then fit a straight line through those hits, because a rachis
-  // is straight in the shaft frame even when the vane around it isn't.
+  // each band, using a line only as a weak prior for a connected curved trace.
   const lumG = new Float32Array(w * h);
   for (let k = 0; k < w * h; k++) {
     const i = k * 4;
@@ -351,18 +408,20 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
     const cnt = new Float32Array(BINS * PROF);
     for (let i = 0; i < n; i++) {
       const b = Math.min(BINS - 1, Math.floor(v[i] * BINS));
-      const t = Math.max(-1, Math.min(1, across[i] / halfWS[b]));
+      const t = Math.max(-1, Math.min(1, (across[i] - midWS[b]) / halfWS[b]));
       const s = Math.round((t * 0.5 + 0.5) * (PROF - 1));
       acc[b * PROF + s] += lumG[ys[i] * w + xs[i]];
       cnt[b * PROF + s]++;
     }
     // ridge = profile minus a wide blur of itself; a shaft is a thin spike, the
     // vane's own shading is broad and cancels
+    const ridge = new Float32Array(BINS * PROF);
     const hit = new Float32Array(BINS);
     const str = new Float32Array(BINS);
     const sgn = new Float32Array(BINS);
-    const WIDE = Math.round(PROF / 4);
+
     for (let b = 0; b < BINS; b++) {
+      const WIDE = Math.max(3, Math.min(24, Math.ceil((3 * Math.max(w, h) / 560) * (PROF - 1) / Math.max(2, 2 * halfWS[b]))));
       const prof = new Float32Array(PROF);
       for (let s = 0; s < PROF; s++) prof[s] = cnt[b * PROF + s] ? acc[b * PROF + s] / cnt[b * PROF + s] : NaN;
       // fill gaps from the nearest valid sample so the blur stays honest
@@ -371,18 +430,33 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
       last = NaN;
       for (let s = PROF - 1; s >= 0; s--) { if (Number.isNaN(prof[s])) prof[s] = last; else last = prof[s]; }
       if (Number.isNaN(prof[0])) continue; // empty band
-      let best = 0, bestV = 0;
-      for (let s = Math.round(PROF * 0.2); s <= Math.round(PROF * 0.8); s++) {
+      let best = 0, bestV = 0, bestScore = -Infinity;
+      for (let s = Math.round(PROF * 0.08); s <= Math.round(PROF * 0.92); s++) {
         let sum = 0, m = 0;
         for (let d = -WIDE; d <= WIDE; d++) {
           const q = Math.max(0, Math.min(PROF - 1, s + d));
           sum += prof[q];
           m++;
         }
-        const res = prof[s] - sum / m;
-        if (Math.abs(res) > Math.abs(bestV)) { bestV = res; best = s; }
+        const broadResidual = prof[s] - sum / m;
+        const polarity = Math.sign(broadResidual);
+        // Reject one-sided pattern boundaries: the shaft has contrast on both sides.
+        const res = polarity * Math.max(0, Math.min(
+          polarity * (prof[s] - prof[Math.max(0, s - WIDE)]),
+          polarity * (prof[s] - prof[Math.min(PROF - 1, s + WIDE)])
+        ));
+        ridge[b * PROF + s] = res;
+        const candidate = midWS[b] + ((s / (PROF - 1)) * 2 - 1) * halfWS[b];
+        // Barbs and pattern edges can have a stronger residual than the shaft,
+        // but they do not stay close to the calamus centreline. This prior is
+        // deliberately soft so an asymmetric flight feather may still place
+        // its rachis away from the area centre.
+        const anchorDistance = Math.abs(candidate - shaftAnchor) / Math.max(2, halfWS[b]);
+        const continuity = 1 - 0.68 * smooth(0.12, 0.72, anchorDistance);
+        const score = Math.abs(res) * continuity;
+        if (score > bestScore) { bestScore = score; bestV = res; best = s; }
       }
-      hit[b] = ((best / (PROF - 1)) * 2 - 1) * halfWS[b];
+      hit[b] = midWS[b] + ((best / (PROF - 1)) * 2 - 1) * halfWS[b];
       str[b] = Math.abs(bestV);
       sgn[b] = Math.sign(bestV);
     }
@@ -401,16 +475,72 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
       swvv += wgt * vv * vv; swvy += wgt * vv * hit[b];
     }
     if (sw > 0.05) {
+      // A strong synthetic observation at the calamus prevents a bright barb
+      // or dark pattern edge from translating the whole fitted shaft sideways.
+      const anchorV = Math.max(0.01, calTopV * 0.5);
+      const anchorWeight = Math.max(0.08, sw * 0.45);
+      sw += anchorWeight;
+      swv += anchorWeight * anchorV;
+      swy += anchorWeight * shaftAnchor;
+      swvv += anchorWeight * anchorV * anchorV;
+      swvy += anchorWeight * anchorV * shaftAnchor;
       const den = sw * swvv - swv * swv;
       const m = Math.abs(den) > 1e-6 ? (sw * swvy - swv * swy) / den : 0;
       const c = (swy - m * swv) / sw;
       for (let b = 0; b < BINS; b++) {
         const vv = (b + 0.5) / BINS;
         // never let the "shaft" wander past the middle of a vane half
-        shaft[b] = Math.max(-halfWS[b] * 0.55, Math.min(halfWS[b] * 0.55, m * vv + c));
+        shaft[b] = Math.max(midWS[b] - halfWS[b] * 0.72, Math.min(midWS[b] + halfWS[b] * 0.72, m * vv + c));
       }
     }
+    // Trace one connected ridge through all bands instead of straightening it.
+    // The line fit stabilises ambiguous areas; fine bilateral contrast follows bends.
+    const prior = shaft.slice();
+    const cost = new Float64Array(BINS * PROF).fill(Infinity);
+    const parent = new Int16Array(BINS * PROF);
+    const at = (b: number, q: number) => midWS[b] + (q / (PROF - 1) * 2 - 1) * halfWS[b];
+    for (let b = 0; b < BINS; b++) for (let q = 3; q < PROF - 3; q++) {
+      const x = at(b, q), width = Math.max(2, halfWS[b]);
+      const base = b <= calTopBin;
+      const evidence = Math.max(0, ridge[b * PROF + q] * want);
+      const localCost = base ? 6 * ((x - midWS[b]) / width) ** 2
+        : -evidence + .30 * ((x - prior[b]) / width) ** 2;
+      if (b === 0) { cost[q] = localCost; continue; }
+      for (let prev = 3; prev < PROF - 3; prev++) {
+        const step = (x - at(b - 1, prev)) / Math.max(2, binLen);
+        const next = cost[(b - 1) * PROF + prev] + localCost + 1.2 * step * step;
+        if (next < cost[b * PROF + q]) { cost[b * PROF + q] = next; parent[b * PROF + q] = prev; }
+      }
+    }
+    let best = 3;
+    for (let q = 4; q < PROF - 3; q++) if (cost[(BINS - 1) * PROF + q] < cost[(BINS - 1) * PROF + best]) best = q;
+    for (let b = BINS - 1; b >= 0; b--) { shaft[b] = b <= calTopBin ? midWS[b] : at(b, best); best = parent[b * PROF + best]; }
+    const traced = shaft.slice();
+    for (let b = 1; b < BINS - 1; b++) shaft[b] = (traced[b - 1] + traced[b] * 2 + traced[b + 1]) / 4;
   }
+
+  // Known library specimens use photographed landmarks at every density.
+  if (opts.shaftGuide && opts.shaftGuide.length >= 2) {
+    const samples = opts.shaftGuide.map(([nx, ny]) => {
+      const px = nx * w - mx, py = ny * h - my;
+      const av = (px * ax + py * ay - aMin) / aSpan;
+      return { v: flip ? 1 - av : av, x: px * bx1 + py * by1 };
+    }).sort((a, b) => a.v - b.v);
+    for (let b = 0; b < BINS; b++) {
+      const vv = (b + .5) / BINS;
+      let k = 0;
+      while (k < samples.length - 2 && samples[k + 1].v < vv) k++;
+      const a = samples[k], z = samples[k + 1];
+      const t = Math.max(0, Math.min(1, (vv - a.v) / Math.max(1e-6, z.v - a.v)));
+      shaft[b] = a.x * (1 - t) + z.x * t;
+    }
+  }
+
+  const shaftAt = (along: number) => {
+    const f = Math.max(0, Math.min(BINS - 1, along * BINS - 0.5));
+    const b = Math.floor(f), t = f - b;
+    return shaft[b] * (1 - t) + shaft[Math.min(BINS - 1, b + 1)] * t;
+  };
 
   // each vane half gets its own half-width, measured from the shaft — that is
   // what makes u = ±1 mean "the outer edge" on BOTH sides of an asymmetric vane
@@ -418,7 +548,7 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   const halfR = new Float32Array(BINS).fill(2);
   for (let i = 0; i < n; i++) {
     const b = Math.min(BINS - 1, Math.floor(v[i] * BINS));
-    const d = across[i] - shaft[b];
+    const d = across[i] - shaftAt(v[i]);
     if (d < 0) halfL[b] = Math.max(halfL[b], -d);
     else halfR[b] = Math.max(halfR[b], d);
   }
@@ -433,7 +563,7 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   const u = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const b = Math.min(BINS - 1, Math.floor(v[i] * BINS));
-    const d = across[i] - shaft[b];
+    const d = across[i] - shaftAt(v[i]);
     u[i] = Math.max(-1.4, Math.min(1.4, d / (d < 0 ? halfL[b] : halfR[b])));
   }
 
@@ -639,7 +769,7 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
       ey /= el;
       // point it outward from the shaft, tie-broken toward the tip
       const b = Math.min(BINS - 1, Math.floor(v[i] * BINS));
-      const side = across[i] - shaft[b] >= 0 ? 1 : -1;
+      const side = across[i] - shaftAt(v[i]) >= 0 ? 1 : -1;
       const outX = side * bx1, outY = side * by1;
       const tipX = tipSign * ax, tipY = tipSign * ay;
       if (ex * outX + ey * outY + 0.35 * (ex * tipX + ey * tipY) < 0) {
@@ -681,11 +811,12 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
     }
     assign[i] = bi;
   }
-  const palette: number[][] = centers
-    .map((c) => [c[0], c[1], c[2]])
-    .map((c) => ({ c, lum: 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] }))
-    .sort((p, q) => q.lum - p.lum)
-    .map((p) => p.c);
+  const paletteOrder = centers
+    .map((c, index) => ({ c, index, lum: 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] }))
+    .sort((p, q) => q.lum - p.lum);
+  const palette = paletteOrder.map(({ c }) => [c[0], c[1], c[2]]);
+  const paletteIndex = new Int16Array(K);
+  paletteOrder.forEach(({ index }, rank) => { paletteIndex[index] = rank; });
 
   // ---- 9. pattern markings: background subtraction (see patterns.ts) ------
   let maxHalfPx = 0;
@@ -730,9 +861,13 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   const keep = new Uint8Array(n);
   {
     let acc = 0;
-    const rate = Math.min(1, TARGET_PARTICLES / n);
+    const rate = Math.min(1, particleTarget / n);
     for (let i = 0; i < n; i++) {
-      acc += rate;
+      const bnorm = Math.min(BINS - 1, Math.floor(v[i] * BINS));
+      const onShaft = Math.abs(across[i] - shaft[bnorm]) < rachisPx[bnorm] * 2.1;
+      // Higgsfield keeps a dense continuous shaft. Bias the photo sample
+      // toward that ridge so a thin quill does not break into dots.
+      acc += rate * (onShaft ? 2.15 : 1);
       if (acc >= 1) {
         acc -= 1;
         keep[i] = 1;
@@ -743,24 +878,30 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   for (let i = 0; i < n; i++) count += keep[i];
 
   const pos = new Float32Array(count * 2);
+  const formZ = new Float32Array(count);
   const rgb = new Float32Array(count * 3);
   const uvA = new Float32Array(count * 2);
+  const photoUV = new Float32Array(count * 2);
   const partA = new Float32Array(count);
   const downyA = new Float32Array(count);
   const barbA = new Float32Array(count * 2);
   const clusterA = new Float32Array(count);
+  const patternA = new Float32Array(count);
   const surfA = new Float32Array(count * 4);
   const patAArr = new Float32Array(count * 4);
   const patBArr = new Float32Array(count * 4);
   const patCArr = new Float32Array(count * 2);
 
   const halfSpan = aSpan / 2;
+  const shaftX = new Float32Array(count);
   const toLocal = (pxx: number, pyy: number): [number, number] => {
     const dx = pxx - mx, dy = pyy - my;
     const a = dx * ax + dy * ay;
     const c = dx * bx1 + dy * by1;
     const t = (a - aMin) / aSpan;
-    return [c / halfSpan, (flip ? 1 - t : t) * 2 - 1];
+    const vv = flip ? 1 - t : t;
+    // Keep the source silhouette and photographed shaft curvature intact.
+    return [(c - shaftAnchor) / halfSpan, vv * 2 - 1];
   };
   // direction transform: both local axes scale by 1/halfSpan, and the along
   // axis flips when the calamus was at the far end
@@ -798,29 +939,51 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   const eyeCenter: [number, number] | null = eyeZone >= 0 ? [zoneGeom[eyeZone].cx, zoneGeom[eyeZone].cy] : null;
 
   let maxX = 0.001;
+  let formedWidth = 0.12;
+  for (let b = 0; b < BINS; b++) formedWidth = Math.max(formedWidth, halfWS[b] / halfSpan);
   let leftArea = 0, rightArea = 0, plumCount = 0, vaneCount = 0;
+  const photoNearest = new Int32Array(w * h).fill(-1);
   let j = 0;
   for (let i = 0; i < n; i++) {
     if (!keep[i]) continue;
-    const x = across[i] / halfSpan;
+    photoNearest[ys[i] * w + xs[i]] = j;
+    photoUV.set([(xs[i] + 0.5) / w, 1 - (ys[i] + 0.5) / h], j * 2);
+    const bnorm = Math.min(BINS - 1, Math.floor(v[i] * BINS));
+    // World x=0 is the recovered rachis at every height. Keeping the old PCA
+    // centroid here while UV/parts used the shaft frame produced two competing
+    // centre lines and a visible black split beside the rachis.
+    const x = toLocal(xs[i], ys[i])[0];
     const y = v[i] * 2 - 1;
     pos[j * 2] = x;
     pos[j * 2 + 1] = y;
     if (Math.abs(x) > maxX) maxX = Math.abs(x);
-    const ci = cols[i];
-    rgb[j * 3] = data[ci] / 255;
-    rgb[j * 3 + 1] = data[ci + 1] / 255;
-    rgb[j * 3 + 2] = data[ci + 2] / 255;
+    const formed = readFormedColor(data, isBg, rowBg, w, h, xs[i], ys[i], plateThreshold, filled);
+    rgb[j * 3] = formed[0];
+    rgb[j * 3 + 1] = formed[1];
+    rgb[j * 3 + 2] = formed[2];
     uvA[j * 2] = u[i];
     uvA[j * 2 + 1] = v[i];
-    clusterA[j] = assign[i];
+    let cluster = assign[i];
+    if (filled[ys[i] * w + xs[i]]) {
+      let bi = 0, bd = Infinity;
+      for (let c = 0; c < K; c++) {
+        const d = dist2(formed, centers[c], 3);
+        if (d < bd) {
+          bd = d;
+          bi = c;
+        }
+      }
+      cluster = bi;
+    }
+    clusterA[j] = paletteIndex[cluster];
+    patternA[j] = -1;
 
-    const bnorm = Math.min(BINS - 1, Math.floor(v[i] * BINS));
     const downy = downyBin[bnorm];
     downyA[j] = downy;
 
     // ---- surface fields ---------------------------------------------------
-    const dShaft = Math.abs(across[i] - shaft[bnorm]);
+    shaftX[j] = (shaftAt(v[i]) - shaftAnchor) / halfSpan;
+    const dShaft = Math.abs((x - shaftX[j]) * halfSpan);
     const spine = smooth(rachisPx[bnorm] * 1.7, rachisPx[bnorm] * 0.7, dShaft);
     const core = Math.min(1, distPx[i] / Math.max(3, 0.35 * halfWS[bnorm]));
     // structural downiness and measured fluff both count; the shaft is never
@@ -830,6 +993,7 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
     surfA[j * 4 + 1] = loose;
     surfA[j * 4 + 2] = Math.min(1, flowC[i]);
     surfA[j * 4 + 3] = spine;
+    formZ[j] = formedRestZ(u[i], v[i], x, spine, loose, formedWidth, formSeed(xs[i], ys[i]));
 
     // barb tangent: outward from the SHAFT (not the area centre), leaning
     // further toward the tip the higher up the vane you are — that is how a
@@ -868,18 +1032,21 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
       patBArr[j * 4] = z.ux;
       patBArr[j * 4 + 1] = z.uy;
       patBArr[j * 4 + 2] = Math.max(-1.4, Math.min(1.4, alongZ));
-      patBArr[j * 4 + 3] = Math.min(1.6, z.round ? Math.hypot(dx, dy) / (z.a * 1.15) : acrossZ);
+      // Keep both normalized ellipse coordinates. The shader can reconstruct
+      // a true elliptical radius for spots while stripes use the across term.
+      patBArr[j * 4 + 3] = Math.min(1.6, acrossZ);
       patCArr[j * 2] = z.str;
       patCArr[j * 2 + 1] = z.seq;
+      patternA[j] = zid;
     } else {
       patAArr[j * 4 + 3] = 0; // kind 0 = not part of any marking
     }
 
     // part label (for the eye pulse, rigidity and the readout)
     let part: number = PART.barbs;
-    if (eyeZone >= 0 && zid === eyeZone) part = PART.eye;
-    else if (v[i] < calTopV) part = PART.calamus;
-    else if (spine > 0.55) part = PART.rachis;
+    // Structural shaft ownership takes precedence over a crossing marking.
+    if (spine > 0.55) part = v[i] < calTopV ? PART.calamus : PART.rachis;
+    else if (eyeZone >= 0 && zid === eyeZone) part = PART.eye;
     // down is decided PER PARTICLE. The band walk only ever finds a full-width
     // plume at the base; a flight feather's afterfeather is a tuft off one
     // side, and averaged across its band it disappears entirely.
@@ -912,15 +1079,61 @@ export function analyzeAnatomy(img: HTMLImageElement, opts: AnalyzeOptions = {})
   else if (halfWidth < 0.12) kind = 'Plume';
   else kind = 'Contour';
 
+  // Propagate the nearest measured sample over the source raster. A continuous
+  // mesh inherits the same anatomical attributes and motion as the point view.
+  const queue = new Int32Array(w * h);
+  let head = 0, tail = 0;
+  for (let k = 0; k < w * h; k++) if (photoNearest[k] >= 0) queue[tail++] = k;
+  while (head < tail) {
+    const k = queue[head++];
+    const visit = (next: number) => {
+      if (photoNearest[next] < 0) { photoNearest[next] = photoNearest[k]; queue[tail++] = next; }
+    };
+    if (k % w) visit(k - 1);
+    if (k % w < w - 1) visit(k + 1);
+    if (k >= w) visit(k - w);
+    if (k < w * (h - 1)) visit(k + w);
+  }
+  const columns = Math.max(32, Math.round(240 * w / Math.max(w, h)));
+  const rows = Math.max(32, Math.round(240 * h / Math.max(w, h)));
+  const positions = new Float32Array((columns + 1) * (rows + 1) * 3);
+  const nearest = new Uint32Array((columns + 1) * (rows + 1));
+  for (let row = 0; row <= rows; row++) for (let col = 0; col <= columns; col++) {
+    const px = col / columns * (w - 1), py = row / rows * (h - 1);
+    const index = row * (columns + 1) + col;
+    const sample = Math.max(0, photoNearest[Math.round(py) * w + Math.round(px)]);
+    const local = toLocal(px, py);
+    const along = (local[1] + 1) * 0.5;
+    const smoothX = local[0];
+    // A mesh needs coherent depth; random down scatter belongs to the point view.
+    const z = formedRestZ(uvA[sample * 2], along, smoothX, surfA[sample * 4 + 3], 0, formedWidth, 0.5);
+    positions.set([smoothX, local[1], z], index * 3);
+    nearest[index] = sample;
+  }
+  const shaftTrace = new Float32Array(BINS * 2);
+  for (let b = 0; b < BINS; b++) {
+    const along = aMin + (flip ? 1 - (b + .5) / BINS : (b + .5) / BINS) * aSpan;
+    shaftTrace[b * 2] = mx + ax * along + bx1 * shaft[b];
+    shaftTrace[b * 2 + 1] = my + ay * along + by1 * shaft[b];
+  }
+  const photoMask = new Uint8Array(w * h);
+  for (let k = 0; k < w * h; k++) photoMask[k] = isBg[k] ? 0 : 255;
+
   return {
+    photoPoints: { uv: photoUV, basis: [bx1 / w, -by1 / h, ysign * ax / w, -ysign * ay / h], footprint: Math.sqrt(n / count) * 1.65, worldSize: 1 / halfSpan },
+    photoSurface: { positions, nearest, mask: photoMask, width: w, height: h, columns, rows },
     count,
     pos,
+    formZ,
+    shaftX,
+    shaftTrace,
     rgb,
     uv: uvA,
     part: partA,
     downy: downyA,
     barb: barbA,
     cluster: clusterA,
+    pattern: patternA,
     surf: surfA,
     patA: patAArr,
     patB: patBArr,

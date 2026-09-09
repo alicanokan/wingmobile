@@ -10,8 +10,9 @@
 
 import { validatePreset, type FeatherPreset } from './rig.ts';
 import type { RemoteLevels } from '../engine/AudioEngine.ts';
+import type { EncounterPhase, ExpressiveState } from '../engine/types.ts';
 
-export const SYNC_VERSION = 1;
+export const SYNC_VERSION = 2;
 
 export interface SyncState {
   nodes: { i: string; w: number; p: boolean }[];
@@ -21,6 +22,7 @@ export interface SyncState {
   /** the console's live audio levels, so a display window with no audio
    *  context of its own is still audio-reactive (see AudioEngine.setRemoteLevels) */
   audio?: RemoteLevels;
+  expressive?: ExpressiveState;
 }
 
 export type SyncMsg =
@@ -58,6 +60,27 @@ export function parseSyncMsg(raw: unknown): SyncMsg | null {
     }
     audio = { level: f01(a.level), loops };
   }
+  let expressive: ExpressiveState | undefined;
+  if (s.expressive && typeof s.expressive === 'object') {
+    const e = s.expressive as Record<string, unknown>;
+    const phases: EncounterPhase[] = ['rest', 'presence', 'breath', 'awakening', 'rememberedEncounter', 'collectiveFlight', 'settling'];
+    if (e.version === 1 && phases.includes(e.phase as EncounterPhase)) {
+      expressive = {
+        version: 1,
+        timestamp: typeof e.timestamp === 'number' && Number.isFinite(e.timestamp) ? e.timestamp : 0,
+        phase: e.phase as EncounterPhase,
+        energy: f01(e.energy),
+        residue: f01(e.residue),
+        recall: f01(e.recall),
+        anticipation: f01(e.anticipation),
+        spatialBreadth: f01(e.spatialBreadth),
+        rootLoad: f01(e.rootLoad),
+        vaneLoad: f01(e.vaneLoad),
+        fringeLoad: f01(e.fringeLoad),
+        settling: f01(e.settling),
+      };
+    }
+  }
   return {
     kind: 'state',
     v: SYNC_VERSION,
@@ -67,6 +90,7 @@ export function parseSyncMsg(raw: unknown): SyncMsg | null {
       feather: typeof s.feather === 'string' ? s.feather : '',
       palette,
       ...(audio ? { audio } : {}),
+      ...(expressive ? { expressive } : {}),
     },
   };
 }

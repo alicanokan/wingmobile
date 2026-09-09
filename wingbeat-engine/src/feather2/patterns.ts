@@ -157,10 +157,9 @@ export function findPatterns(inp: Input): PatternResult {
         const p = stack.pop()!;
         px.push(p);
         const x = xs[p], y = ys[p];
-        for (let d = 0; d < 8; d++) {
-          const nx = x + ((d & 1) ? 1 : 0) - ((d & 2) ? 1 : 0);
-          const ny = y + ((d & 4) ? 1 : 0) - ((d & 8) ? 1 : 0);
-          if (nx === x && ny === y) continue;
+        for (const [ox, oy] of [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] as const) {
+          const nx = x + ox;
+          const ny = y + oy;
           if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
           const gi = gridIdx[ny * w + nx];
           if (gi < 0 || compOf[gi] !== -1) continue;

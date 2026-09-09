@@ -251,16 +251,14 @@ function ProceduralFeather({ engine, featherId }: { engine: WingbeatEngine; feat
 
   useFrame((state) => {
     const t = state.clock.getElapsedTime();
-    let maxWind = 0;
-    for (const n of engine.getNodes()) if (n.wind > maxWind) maxWind = n.wind;
-    driveRef.current += (maxWind - driveRef.current) * 0.08;
+    const expression = engine.getExpressiveState();
+    const inherited = Math.max(expression.energy, expression.residue * 0.45, expression.recall, expression.anticipation);
+    driveRef.current += (inherited - driveRef.current) * (inherited > driveRef.current ? 0.16 : 0.035);
     const drive = driveRef.current;
 
-    // Bloom: the feather FORM appears only when the held feather is taken in
-    // hand (feather_01 presence / breath). Idle → collapses to a single line.
-    const fNode = engine.getNode('feather_01');
-    const featherAct = Math.max(fNode?.present ? 0.9 : 0, fNode?.wind ?? 0);
-    bloomRef.current += (featherAct - bloomRef.current) * 0.05; // slow, graceful
+    // Rest remains one complete readable feather; presence is invitation, not
+    // permission for the body to exist.
+    bloomRef.current += (1 - bloomRef.current) * 0.05;
     const bloom = bloomRef.current;
 
     // per-sensor energies → each channel flutters its own band of the feather
@@ -288,7 +286,11 @@ function ProceduralFeather({ engine, featherId }: { engine: WingbeatEngine; feat
 
     // The rachis is the still SOURCE — it barely moves: a tiny, slow breath only,
     // independent of wind. All the motion lives in the barbs.
-    const bend = (p: number) => Math.pow(p, 1.4) * Math.sin(t * 0.4 + p * 1.3) * 0.05;
+    const bend = (p: number) => Math.pow(p, 2) * (
+      Math.sin(t * 0.26 + p) * 0.012
+      + expression.rootLoad * 0.42
+      - expression.anticipation * 0.16
+    );
 
     const { yV, pV, wL, wR } = built;
 
@@ -874,36 +876,27 @@ function ImageFeather({
     if (!points) return;
     readChannelEnergies(engine, energies.current);
     const E = energies.current;
-    let maxW = 0;
-    for (const n of engine.getNodes()) if (n.wind > maxW) maxW = n.wind;
+    const expression = engine.getExpressiveState();
+    const inherited = Math.max(expression.energy, expression.residue * 0.45, expression.recall, expression.anticipation);
     // per-sensor activation = held wind + accumulated pump
-    let maxE = 0;
     let maxAct = 0;
-    let minAct = Infinity;
     let totalAir = 0;
-    let active = 0;
     for (let i = 0; i < NCH; i++) {
       const e = E[i];
       const act = e + pumps.current[i];
-      if (e > maxE) maxE = e;
       if (act > maxAct) maxAct = act;
-      if (act < minAct) minAct = act;
       totalAir += Math.min(1.2, act);
-      if (act > 0.12) active++;
     }
-    baseRef.current += (maxW - baseRef.current) * 0.08;
+    baseRef.current += (inherited - baseRef.current) * (inherited > baseRef.current ? 0.16 : 0.035);
 
     // PHASE 1 — pressing 'f' (feather in hand) GROWS the 3D contour in from the
     // rachis (calamus→rachis→barbs) as a dim grey silhouette. Sensor pulses then
     // reveal the coloured layers on top. No 'f' and no activity → it collapses away.
-    const f = engine.getNode('feather_01');
-    const featherAct = f?.present ? 1.15 : (f?.wind ?? 0) * 1.1;
-    // auto-audio keeps the feather present so its layers can dance to the loops
-    const bloomTarget = Math.min(1.15, Math.max(featherAct, maxAct, rig.global.autoAudio ? 0.7 : 0));
+    const bloomTarget = 1;
     bloomRef.current += (bloomTarget - bloomRef.current) * 0.05;
 
     // engagement → phase gates 2 (pattern visible) and 3 (audio-reactive)
-    engageRef.current += (maxAct - engageRef.current) * 0.07;
+    engageRef.current += (Math.max(maxAct, inherited) - engageRef.current) * 0.07;
     const eng = engageRef.current;
     const p2 = smooth01(eng, 0.12, 0.5);
     const p3 = smooth01(eng, 0.4, 0.85);
@@ -911,8 +904,8 @@ function ImageFeather({
 
     // PHASE 4 — disperse only when ALL sensors are pumped HARD (not just lightly
     // active), so a gentle all-5 press keeps the settled image instead of noise.
-    const allHard = active >= NCH ? smooth01(minAct, 0.7, 1.4) : 0;
-    disperseRef.current += (allHard - disperseRef.current) * 0.025;
+    const allHard = 0;
+    disperseRef.current += (allHard - disperseRef.current) * 0.08;
 
     const u = (points.material as THREE.ShaderMaterial).uniforms;
     const tNow = state.clock.getElapsedTime();

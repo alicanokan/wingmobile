@@ -10,6 +10,7 @@ export interface FeatherItem {
 
 export const FEATHERS: FeatherItem[] = [
   { id: 'procedural', src: '', label: 'Procedural', procedural: true },
+  { id: 'air-study', src: '/feathers/air-study.png', label: 'Air study' },
   { id: '01f', src: '/feathers/01f.png', label: 'Feather 01' },
   { id: '02f', src: '/feathers/02f.png', label: 'Feather 02' },
   { id: '04f', src: '/feathers/04f.png', label: 'Feather 04' },

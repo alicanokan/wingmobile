@@ -232,6 +232,50 @@ src/
   gain, the operator map — follows automatically.
 - **The projected visual** → `sim/Projection.tsx`.
 
+## Feather Lab · `/feather2`
+
+The lab opens with a specimen from the collection. Import an image or drop it
+onto the workspace to analyse another feather. Scans run in a cancellable web
+worker; changing specimens or sensitivity keeps the current artwork responsive
+until the latest analysis is ready.
+
+- **Appearance:** natural colour, anatomical regions, pattern zones or measured
+  surface fields; particle material, depth, bloom, lens effects and beat echo.
+- **Reactivity:** Organic, Percussive and Weightless response presets, with
+  sensitivity and frame-rate-independent attack/release controls. The routing
+  matrix still maps musical elements to anatomical movement and lens effects.
+- **Touch wind:** select the wind tool, then hold and drag on the feather.
+  Local gusts follow your hand; loose barbs yield and settle around the shaft.
+- **Analysis:** shape estimate, part proportions, vane profile, left/right
+  balance, measured barb clarity and the extracted palette. These are image
+  measurements, not species identification or model confidence.
+- **Particle amount and groups:** choose the source density from 24k to 240k.
+  The scan keeps six colour clusters and up to twelve detected marking groups.
+  The Layers editor turns anatomy, colours and markings into editable masks.
+  Masks can be moved into collapsible master layers. Both masters and masks
+  can be renamed, hidden or soloed and have independent brightness, particle
+  size, movement, depth and audio matrices; master settings drive every child.
+  **Auto 8** rebuilds semantic masters for vane body, patterns, dominant and
+  accent colours, rachis, calamus, down/fringe and marking anatomy. Matrix
+  response can be muted independently without hiding the visual layer.
+  Master layers also have triggerable Pulse, Flutter, Shimmer, Lift and
+  Blackout presets. Any detected musical element can toggle an effect, hold it
+  as a gate or fire it as a decaying one-shot.
+- **Interaction zones:** the Zones inspector provides a separate master-to-zone
+  gain matrix. Each zone is a reusable trigger object with its own trigger,
+  toggle/gate/one-shot behaviour, steady/sine/strobe motion, speed,
+  attack/release and brightness, particle-size, movement and depth outputs.
+  A triggered zone only affects masters routed to it.
+  True-black plates use a strict edge mask so dark pigment is retained.
+- **Audio:** load a looping track, enable the microphone, or try the explicitly
+  labelled silent 108 BPM demo. The demo does not send signals to the LED rig.
+- **Presentation:** hide the workspace controls; Escape brings them back.
+  Photograph/Particles switches between the original and its reconstruction.
+
+Settings stay on this device. The mobile layout places the collection above
+the artwork and the inspector below it. The operator console links to the lab
+from its Projection controls.
+
 ## Build
 
 ```bash

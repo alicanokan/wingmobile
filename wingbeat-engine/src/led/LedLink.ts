@@ -48,6 +48,7 @@ export class LedLink {
   private nodes = new Map<NodeId, DiscoveredNode>();
   private _sent = 0;
   private _dropped = 0;
+  private sequence = 0;
   url = '';
 
   get status(): LinkStatus {
@@ -168,7 +169,7 @@ export class LedLink {
       this._dropped++;
       return false;
     }
-    const wire: LedWire = { ...cmd, src };
+    const wire: LedWire = { ...cmd, src, seq: ++this.sequence, sentAt: Date.now(), ttlMs: 3500 };
     this.client.publish(topics.cmdLed(id), JSON.stringify(wire), { qos: QOS.cmdStream, retain: false });
     this._sent++;
     return true;

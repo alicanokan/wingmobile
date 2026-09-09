@@ -10,7 +10,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './ui.css';
+import './mobile.css';
 import { WingbeatEngine } from '../engine/WingbeatEngine.ts';
+import type { EncounterPhase, GestureTrace, InputSource } from '../engine/types.ts';
+import { replayGestureTraceRealtime } from '../engine/replay.ts';
 import { AudioEngine } from '../engine/AudioEngine.ts';
 import { SCENES, getScene } from '../engine/scenes.ts';
 import { ledService } from '../led/ledService.ts';
@@ -107,6 +110,12 @@ export default function App() {
   const [status, setStatus] = useState<TransportStatus>('idle');
 
   const [audioReady, setAudioReady] = useState(false);
+  const [encounterPhase, setEncounterPhase] = useState<EncounterPhase>('rest');
+  const [performanceState, setPerformanceState] = useState<'stopped' | 'running' | 'held' | 'settling'>('stopped');
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const [ledHealth, setLedHealth] = useState(ledService.link.status);
+  const [recordingTrace, setRecordingTrace] = useState(false);
+  const [lastTrace, setLastTrace] = useState<GestureTrace | null>(null);
   const [autoDemo, setAutoDemo] = useState(false);
   const [masterGain, setMasterGain] = useState(savedConsole.masterGain);
   const [windSens, setWindSens] = useState(savedConsole.windSens);
@@ -128,8 +137,21 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false);
   const [showPair, setShowPair] = useState(false);
   // Landing entry mode (null = show the landing screen, every visit).
-  const [entryMode, setEntryMode] = useState<EntryMode | null>(null);
+  const [entryMode, setEntryMode] = useState<EntryMode | null>(() => {
+    const requested = new URLSearchParams(window.location.search).get('mode');
+    return requested && ['fullscreen', 'control', 'performance', 'mobile'].includes(requested)
+      ? requested as EntryMode
+      : null;
+  });
   const [theme, toggleTheme] = useTheme();
+  // Keep `?mode=` in step with the chosen door, so a refresh (or a shared
+  // link like /?mode=mobile) lands back in the same experience.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (entryMode) url.searchParams.set('mode', entryMode);
+    else url.searchParams.delete('mode');
+    if (url.href !== window.location.href) window.history.replaceState(null, '', url);
+  }, [entryMode]);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [mobileFirstTime, setMobileFirstTime] = useState(() => !localStorage.getItem('wb.mobile.setup'));
   const [swipeCount, setSwipeCount] = useState(0);
@@ -419,6 +441,9 @@ export default function App() {
   };
 
   const snapshot = useEngineSnapshot(engine);
+  useEffect(() => engine.on('expressive', ({ state }) => setEncounterPhase(state.phase)), [engine]);
+  useEffect(() => ledService.onStatus(setLedHealth), []);
+  useEffect(() => engine.setReducedMotion(reducedMotion), [engine, reducedMotion]);
 
   // Conductor: apply live pushes from /conductor (rig, feather, scene, loop
   // samples) — the conductor page drives every connected device through the
@@ -544,18 +569,19 @@ export default function App() {
     if (!transport) return;
     const simT = transport.kind === 'sim' ? (transport as SimTransport) : null;
     const sim = {
-      blow: (id: string, v: number) => (simT ? simT.blow(id, v) : engine.ingestWind(id, v)),
-      holdWind: (id: string, v: number) =>
-        simT ? simT.holdWind(id, v) : engine.ingestWind(id, Math.min(1, Math.max(0, v))),
-      releaseWind: (id: string) => (simT ? simT.releaseWind(id) : engine.ingestWind(id, 0)),
-      shake: (id: string, m: number) => (simT ? simT.shake(id, m) : engine.ingestMotion(id, m)),
-      setPresence: (id: string, p: boolean) =>
-        simT ? simT.setPresence(id, p) : engine.ingestPresence(id, p),
+      blow: (id: string, v: number, source: InputSource = 'simulation') => (simT ? simT.blow(id, v, source) : engine.ingestWind(id, v, source)),
+      holdWind: (id: string, v: number, source: InputSource = 'simulation') =>
+        simT ? simT.holdWind(id, v, source) : engine.ingestWind(id, Math.min(1, Math.max(0, v)), source),
+      releaseWind: (id: string, source: InputSource = 'simulation') => (simT ? simT.releaseWind(id, source) : engine.ingestWind(id, 0, source)),
+      shake: (id: string, m: number, source: InputSource = 'simulation') => (simT ? simT.shake(id, m, source) : engine.ingestMotion(id, m, source)),
+      setPresence: (id: string, p: boolean, source: InputSource = 'simulation') =>
+        simT ? simT.setPresence(id, p, source) : engine.ingestPresence(id, p, source),
     };
     let meterTick = 0;
     let lastT = 0;
     let keyPeak = 0; // live max key pulse, for the keyboard meter
     const driven = new Set<string>(); // parts we currently hold, to release on unpatch
+    const drivenSources = new Map<string, InputSource>();
 
     // A timer, not requestAnimationFrame: rAF freezes in a hidden tab, which
     // cut every phone/mic/camera input (and so all sound) the moment the
@@ -571,6 +597,7 @@ export default function App() {
       // Stage 1: each slot's current value from its source.
       // Stage 2: fan out to the parts it's linked to (max-combine on overlap).
       const partVal: Record<string, number> = {};
+      const partSource: Record<string, InputSource> = {};
       keyPeak = 0;
       for (const slot of SLOTS) {
         const src = sources[slot.id];
@@ -599,8 +626,12 @@ export default function App() {
         }
         // 'esp' is handled by the hardware transport; 'off' is silent.
         if (v <= 0.001) continue;
+        const inputSource: InputSource = src === 'mic' ? 'microphone' : src === 'camera' ? 'camera' : isDeviceKey(src) ? 'touch' : 'simulation';
         for (const pid of parts[slot.id] ?? []) {
-          partVal[pid] = Math.max(partVal[pid] ?? 0, v);
+          if (v >= (partVal[pid] ?? 0)) {
+            partVal[pid] = v;
+            partSource[pid] = inputSource;
+          }
         }
       }
 
@@ -608,14 +639,18 @@ export default function App() {
         // per-sensor sensitivity from the rig (set in the Rig panel / Conductor)
         const sens = rig.sensors[p.id]?.sensitivity ?? 1;
         const v = Math.min(1, (partVal[p.id] ?? 0) * sens);
+        const source = partSource[p.id] ?? 'simulation';
         if (v > 0.001) {
-          sim.holdWind(p.id, v);
-          sim.setPresence(p.id, v > 0.05);
+          sim.holdWind(p.id, v, source);
+          sim.setPresence(p.id, v > 0.05, source);
           driven.add(p.id);
+          drivenSources.set(p.id, source);
         } else if (driven.has(p.id)) {
-          sim.releaseWind(p.id);
-          sim.setPresence(p.id, false);
+          const previousSource = drivenSources.get(p.id) ?? source;
+          sim.releaseWind(p.id, previousSource);
+          sim.setPresence(p.id, false, previousSource);
           driven.delete(p.id);
+          drivenSources.delete(p.id);
         }
       }
 
@@ -630,8 +665,9 @@ export default function App() {
     return () => {
       clearInterval(timer);
       driven.forEach((id) => {
-        sim.releaseWind(id);
-        sim.setPresence(id, false);
+        const source = drivenSources.get(id) ?? 'simulation';
+        sim.releaseWind(id, source);
+        sim.setPresence(id, false, source);
       });
     };
   }, [transport, sources, parts, mic, cam]);
@@ -646,7 +682,7 @@ export default function App() {
       const nodes = engine.getNodes().map((n) => ({ i: n.id, w: n.wind, p: n.present }));
       b.send({
         kind: 'state',
-        state: { nodes, scene: engine.scene, feather, palette: engine.featherPalette, audio: audio.ready ? audio.snapshotLevels() : undefined },
+        state: { nodes, scene: engine.scene, feather, palette: engine.featherPalette, expressive: engine.getExpressiveState(), audio: audio.ready ? audio.snapshotLevels() : undefined },
       });
       // rig only when it actually changes (ignore the updatedAt timestamp)
       if (tick++ % 6 === 0) {
@@ -678,8 +714,19 @@ export default function App() {
   useEffect(() => {
     const id = setInterval(() => {
       const sensors: Record<string, { wind: number; motion: number; present: boolean; hue: number }> = {};
-      for (const n of engine.getNodes()) {
-        sensors[n.id] = { wind: n.wind, motion: n.motion, present: n.present, hue: (((n.hue % 360) + 360) % 360) / 360 };
+      const expression = engine.getExpressiveState();
+      const nodes = engine.getNodes();
+      for (let index = 0; index < nodes.length; index++) {
+        const n = nodes[index];
+        // A low-detail near → across-room path derived from body motion. LEDs
+        // no longer duplicate the raw input meter.
+        const path = Math.max(0, 1 - Math.abs(index / Math.max(1, nodes.length - 1) - expression.spatialBreadth) * 2.2);
+        sensors[n.id] = {
+          wind: Math.min(1, expression.fringeLoad * 0.35 + expression.spatialBreadth * path * 0.65),
+          motion: expression.vaneLoad * path,
+          present: expression.phase !== 'rest',
+          hue: (((n.hue % 360) + 360) % 360) / 360,
+        };
       }
       ledService.push({ sensors, sceneLed: getScene(engine.scene).led });
     }, 40);
@@ -912,12 +959,87 @@ export default function App() {
     setAudioReady(true);
   };
 
+  const startPerformance = async () => {
+    engine.hold(false);
+    engine.setPatterns(false);
+    if (!audioReady) {
+      audio.setMasterGain(masterGain);
+      await audio.start();
+      setAudioReady(true);
+    }
+    setPerformanceState('running');
+  };
+  const holdPerformance = () => {
+    engine.hold(true);
+    setPerformanceState('held');
+  };
+  const settlePerformance = () => {
+    engine.settle();
+    setPerformanceState('settling');
+  };
+  const stopPerformance = async () => {
+    engine.settle();
+    await audio.stop();
+    setAudioReady(false);
+    setPerformanceState('stopped');
+  };
+  const emergencyPerformance = async () => {
+    engine.emergencyStop();
+    ledService.allOff();
+    await audio.stop();
+    setAudioReady(false);
+    setPerformanceState('stopped');
+  };
+  const toggleTraceRecording = () => {
+    if (!recordingTrace) {
+      engine.startRecording();
+      setRecordingTrace(true);
+      return;
+    }
+    setLastTrace(engine.stopRecording());
+    setRecordingTrace(false);
+  };
+  const replayLastTrace = () => {
+    if (!lastTrace) return;
+    engine.settle();
+    replayGestureTraceRealtime(lastTrace, (sample) => engine.ingestSample(sample));
+  };
+
   const sim = transport?.kind === 'sim' ? (transport as SimTransport) : null;
   const featherLabel = FEATHERS.find((f) => f.id === feather)?.label ?? feather;
 
   // ---- Landing (shown every visit) --------------------------------------
   if (entryMode === null) {
     return <Landing onPick={setEntryMode} />;
+  }
+
+  if (entryMode === 'performance') {
+    const online = snapshot.nodes.filter((node) => node.online).length;
+    return <div className={`wb-performance ${themeClass(theme)} ${reducedMotion ? 'reduced' : ''}`}>
+      <Projection engine={engine} audio={audio} featherId={feather} paused={performanceState === 'held' || performanceState === 'stopped'} />
+      <aside className="wb-performance-panel">
+        <header><div><small>PERFORMANCE</small><strong>{featherLabel}</strong></div><button onClick={() => setEntryMode(null)}>Exit</button></header>
+        <div className="wb-performance-phase"><span>Encounter phase</span><strong>{encounterPhase.replace(/([A-Z])/g, ' $1')}</strong></div>
+        <div className="wb-performance-actions">
+          <button className="primary" onClick={startPerformance}>Start</button>
+          <button onClick={holdPerformance} disabled={performanceState !== 'running'}>Hold</button>
+          <button onClick={settlePerformance} disabled={performanceState === 'stopped'}>Settle</button>
+          <button onClick={stopPerformance}>Stop</button>
+        </div>
+        <label className="wb-performance-slider"><span>Sensitivity <output>{windSens.toFixed(1)}×</output></span><input type="range" min=".2" max="2" step=".1" value={windSens} onChange={(event) => setWindSens(Number(event.target.value))} /></label>
+        <label className="wb-performance-slider"><span>Sound <output>{Math.round(masterGain * 100)}%</output></span><input type="range" min="0" max="1" step=".05" value={masterGain} onChange={(event) => setMasterGain(Number(event.target.value))} /></label>
+        <label className="wb-performance-check"><input type="checkbox" checked={reducedMotion} onChange={(event) => setReducedMotion(event.target.checked)} /> Reduced motion</label>
+        <div className="wb-performance-health">
+          <span><i className={online ? 'ok' : ''} />Sensors {online}/{snapshot.nodes.length}</span>
+          <span><i className={audioReady ? 'ok' : ''} />Audio {audioReady ? 'ready' : 'stopped'}</span>
+          <span><i className={status === 'connected' ? 'ok' : ''} />Input {status}</span>
+          <span><i className={ledHealth === 'connected' ? 'ok' : ''} />LED {ledHealth}</span>
+          <span><i className="ok" />Renderer ready</span>
+        </div>
+        <p>Scene editing is locked in performance mode. Stop settles the artwork; emergency stop immediately mutes installation outputs.</p>
+        <button className="emergency" onClick={emergencyPerformance}>Emergency stop</button>
+      </aside>
+    </div>;
   }
 
   // ---- Fullscreen: immersive feather only -------------------------------
@@ -937,6 +1059,8 @@ export default function App() {
     return (
       <div className={`wb-mobileexp ${themeClass(theme)}`}>
         <Projection engine={engine} audio={audio} featherId={feather} paused={false} />
+
+        <div className="wb-mx-brand"><b>Wing Beat</b><i>·</i>mobile</div>
 
         {!mobileMenu && !showPair && !camOn && <DeviceHud peers={devicePeers} levels={levels} onOpen={() => setShowPair(true)} />}
 
@@ -961,12 +1085,13 @@ export default function App() {
         {mobileFirstTime && (
           <div className="wb-modal-overlay">
             <div className="wb-modal-content">
-              <div className="wb-modal-head">Welcome to Wing Beat Mobile</div>
-              <div className="wb-modal-text">What would you like to enable?</div>
+              <div className="wb-modal-over">WING BEAT · MOBILE</div>
+              <div className="wb-modal-head">Send a little air.</div>
+              <div className="wb-modal-text">Choose what moves the feather on this phone. You can change it any time from the quick controls.</div>
               <div className="wb-modal-buttons">
-                <button className="wb-btn" onClick={() => { setCamOn(true); localStorage.setItem('wb.mobile.setup', '1'); setMobileFirstTime(false); }}>📷 Camera</button>
-                <button className="wb-btn" onClick={() => { setMicOn(true); localStorage.setItem('wb.mobile.setup', '1'); setMobileFirstTime(false); }}>🎤 Microphone</button>
-                <button className="wb-btn" onClick={() => { localStorage.setItem('wb.mobile.setup', '1'); setMobileFirstTime(false); }}>Skip</button>
+                <button className="wb-btn primary" onClick={() => { setCamOn(true); localStorage.setItem('wb.mobile.setup', '1'); setMobileFirstTime(false); }}>Camera <span>↗</span></button>
+                <button className="wb-btn" onClick={() => { setMicOn(true); localStorage.setItem('wb.mobile.setup', '1'); setMobileFirstTime(false); }}>Microphone <span>↗</span></button>
+                <button className="wb-btn quiet" onClick={() => { localStorage.setItem('wb.mobile.setup', '1'); setMobileFirstTime(false); }}>Just watch</button>
               </div>
             </div>
           </div>
@@ -981,8 +1106,8 @@ export default function App() {
               style={{
                 width: '100%',
                 height: '100%',
-                borderRadius: 4,
-                border: '1px solid #3aa0f5',
+                borderRadius: 5,
+                border: '1px solid #b5cba2',
                 background: '#000',
                 display: 'block',
                 imageRendering: 'pixelated',
@@ -1038,6 +1163,13 @@ export default function App() {
         <button className="wb-theme-toggle" onClick={toggleTheme} title="Toggle light/dark theme">
           {theme === 'light' ? '☀ Light' : '☾ Dark'}
         </button>
+
+        <div className="wb-rail-sec">Runtime</div>
+        <div className="wb-rail-group">
+          <button className="wb-btn accent" onClick={() => setEntryMode('performance')}>Open performance mode</button>
+          <button className={`wb-btn ${recordingTrace ? 'active' : ''}`} onClick={toggleTraceRecording}>{recordingTrace ? 'Stop trace recording' : 'Record sensor trace'}</button>
+          <button className="wb-btn" onClick={replayLastTrace} disabled={!lastTrace}>Replay last trace</button>
+        </div>
 
         <div className="wb-rail-sec">Source</div>
         <div className="wb-rail-group">
@@ -1189,6 +1321,13 @@ export default function App() {
             title="Conductor — samples, sensor routing & presets for the whole installation"
           >
             🎼 Conductor
+          </button>
+          <button
+            className="wb-btn"
+            onClick={() => window.open('/feather2', 'wingbeat-lab')}
+            title="Feather Lab — photo analysis, particle material and musical response"
+          >
+            ↗ Feather Lab
           </button>
           <div className="wb-rail-feather">{featherLabel}</div>
         </div>

@@ -16,6 +16,60 @@ export type NodeId = string;
 
 /** The three things a node can sense. Matches `wingbeat/node/<id>/sensor/<kind>`. */
 export type SensorKind = 'wind' | 'motion' | 'presence';
+export type InputSource = 'simulation' | 'mqtt' | 'microphone' | 'camera' | 'touch' | 'replay';
+export type InputUnit = 'normalized' | 'boolean' | 'g' | 'centimeter';
+
+/** Versioned, replayable input at the engine boundary. Raw visitor audio is never stored. */
+export interface CalibratedInputSample {
+  version: 1;
+  source: InputSource;
+  nodeId: NodeId;
+  kind: SensorKind;
+  value: number;
+  /** Monotonic engine time used for simulation and replay. */
+  timestamp: number;
+  /** Optional timestamp supplied by the source device, kept for diagnostics. */
+  sourceTimestamp?: number;
+  valid: boolean;
+  unit: InputUnit;
+}
+
+export interface GestureTrace {
+  version: 1;
+  startedAt: number;
+  samples: CalibratedInputSample[];
+}
+
+export interface GestureEvent {
+  version: 1;
+  id: string;
+  nodeId: NodeId;
+  kind: SensorKind;
+  source: InputSource;
+  onset: number;
+  duration: number;
+  strength: number;
+  rise: number;
+  fall: number;
+}
+
+export type EncounterPhase = 'rest' | 'presence' | 'breath' | 'awakening' | 'rememberedEncounter' | 'collectiveFlight' | 'settling';
+
+/** One bounded state consumed by projection, sound, speakers, and LEDs. */
+export interface ExpressiveState {
+  version: 1;
+  timestamp: number;
+  phase: EncounterPhase;
+  energy: number;
+  residue: number;
+  recall: number;
+  anticipation: number;
+  spatialBreadth: number;
+  rootLoad: number;
+  vaneLoad: number;
+  fringeLoad: number;
+  settling: number;
+}
 
 /** A node's job in the space. Mirrors the `role` field in MQTT status. */
 export type NodeRole = 'sensor' | 'feather' | 'audio' | 'plant';
@@ -115,6 +169,13 @@ export interface Scene {
   /** Tempo (beats per minute) the scene's uploaded loops/samples are authored at,
    *  so the loop transport and any MIDI/pattern engine can sync to them. */
   bpm: number;
+  authorship: {
+    status: 'study' | 'contributor-authorized';
+    contributors: string[];
+    provenance: string;
+    consentReference: string;
+    permittedTransforms: Array<'gain' | 'spatial' | 'timing' | 'fragment' | 'pitch'>;
+  };
 }
 
 // ---------- Spatial model (the room in the layout diagram) ------------------
@@ -158,6 +219,10 @@ export type EngineEvent =
   | { type: 'perc'; id: NodeId; note: string; velocity: number; pan: number }
   | { type: 'accent'; id: NodeId; note: string; velocity: number; pan: number }
   | { type: 'wind'; maxWind: number; perSpeakerGain: number[] }
+  | { type: 'input'; sample: CalibratedInputSample }
+  | { type: 'gesture'; gesture: GestureEvent }
+  | { type: 'expressive'; state: ExpressiveState }
+  | { type: 'encounter'; phase: EncounterPhase; previous: EncounterPhase }
   | { type: 'audioReady' };
 
 export type EngineEventType = EngineEvent['type'];

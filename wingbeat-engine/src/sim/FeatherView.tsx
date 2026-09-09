@@ -79,6 +79,7 @@ export default function FeatherView() {
           engine.ingestWind(n.i, n.w);
           engine.ingestPresence(n.i, n.p);
         }
+        if (s.expressive) engine.applyExpressiveState(s.expressive);
         if (s.palette?.length) engine.setFeatherPalette(s.palette);
         if (s.audio) audio.setRemoteLevels(s.audio);
         if (s.feather) setFeather((f) => (f !== s.feather ? s.feather : f));

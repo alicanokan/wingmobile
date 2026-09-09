@@ -55,6 +55,9 @@ bool     bedRequested       = false;
 String   currentLayerPath   = "";
 String   queuedLayerPath    = "";   // a one-shot to start when current finishes
 bool     queuedLoop         = false;
+unsigned long lastAudioCommandMs = 0;
+unsigned long audioCommandTtlMs  = 0;
+uint32_t      lastAudioSequence  = 0;
 
 // MQTT topic helpers --------------------------------------------------------
 String topicStatus()      { return String("wingbeat/node/") + NODE_ID + "/status"; }
@@ -137,6 +140,15 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   String t = topic;
 
   if (t == topicCmdAudio()) {
+    unsigned long now = millis();
+    uint32_t seq = d["seq"] | 0;
+    unsigned long ttl = d["ttlMs"] | 5000UL;
+    if (ttl < 100) ttl = 100;
+    if (ttl > 30000) ttl = 30000;
+    if (seq && seq <= lastAudioSequence && now - lastAudioCommandMs < audioCommandTtlMs) return;
+    lastAudioSequence = seq;
+    lastAudioCommandMs = now;
+    audioCommandTtlMs = ttl;
     const char* layer = d["layer"] | "";
     bool play         = d["play"]  | true;
     bool loop         = d["loop"]  | (strcmp(layer, "bed") == 0); // bed loops by default
@@ -221,6 +233,15 @@ void setup() {
 void loop() {
   if (!mqtt.connected()) connectMqtt();
   mqtt.loop();
+
+  // Browser or broker loss returns commanded audio to silence. The boot-time
+  // ambient bed has no command lease and is unaffected until a command arrives.
+  if (audioCommandTtlMs && millis() - lastAudioCommandMs > audioCommandTtlMs) {
+    audioCommandTtlMs = 0;
+    queuedLayerPath = "";
+    queuedLoop = false;
+    stopAudio();
+  }
 
   // pump audio
   if (gen && gen->isRunning()) {

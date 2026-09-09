@@ -265,6 +265,9 @@ export class AudioFeed {
   private lastT = 0;
 
   sourceLabel = '';
+  private fileUrl = '';
+  private fileName = '';
+  private disposed = false;
 
   private ensureCtx(): AudioContext {
     if (!this.ctx) {
@@ -311,6 +314,7 @@ export class AudioFeed {
   async useFile(file: File): Promise<void> {
     const ctx = this.ensureCtx();
     await ctx.resume();
+    if (this.disposed) return;
     this.stopMic();
     if (!this.el) {
       this.el = new Audio();
@@ -319,17 +323,23 @@ export class AudioFeed {
       this.tap(this.elSrc);
       this.elSrc.connect(ctx.destination); // music is meant to be heard
     }
-    this.el.src = URL.createObjectURL(file);
-    await this.el.play();
+    if (this.fileUrl) URL.revokeObjectURL(this.fileUrl);
+    this.fileUrl = URL.createObjectURL(file);
+    this.el.src = this.fileUrl;
+    this.fileName = file.name;
     this.sourceLabel = file.name;
+    await this.el.play();
   }
 
   /** Analyse the microphone (not routed to the speakers — no feedback). */
   async useMic(): Promise<void> {
     const ctx = this.ensureCtx();
     await ctx.resume();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (this.disposed) { stream.getTracks().forEach((track) => track.stop()); return; }
+    this.stopMic();
     this.pauseFile();
-    this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.micStream = stream;
     this.micSrc = ctx.createMediaStreamSource(this.micStream);
     this.tap(this.micSrc);
     this.sourceLabel = 'microphone';
@@ -340,13 +350,14 @@ export class AudioFeed {
     this.micSrc = null;
     this.micStream?.getTracks().forEach((t) => t.stop());
     this.micStream = null;
-    if (this.sourceLabel === 'microphone') this.sourceLabel = '';
+    if (this.sourceLabel === 'microphone') this.sourceLabel = this.fileName;
   }
 
   pauseFile(): void {
     this.el?.pause();
   }
   async resumeFile(): Promise<void> {
+    this.stopMic();
     await this.ctx?.resume();
     await this.el?.play();
   }
@@ -361,9 +372,12 @@ export class AudioFeed {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.stopMic();
     this.el?.pause();
     this.el = null;
+    if (this.fileUrl) URL.revokeObjectURL(this.fileUrl);
+    this.fileUrl = '';
     this.ctx?.close().catch(() => {});
     this.ctx = null;
   }

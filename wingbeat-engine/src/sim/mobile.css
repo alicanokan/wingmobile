@@ -1,0 +1,130 @@
+/* ============================================================================
+   Mobile experience — restyled in the Wing Beat visual system introduced by
+   the landing page (landing.css): black ground, warm white ink, sage accent,
+   hairline dividers, monospace overlines, Avenir Next. Scoped to
+   .wb-mobileexp so the operator console keeps its own look.
+   ============================================================================ */
+.wb-mobileexp {
+  --wm-bg: #000;
+  --wm-ink: #f0f1e9;
+  --wm-muted: #a4ad9c;
+  --wm-dim: #6f7869;
+  --wm-line: #303a29;
+  --wm-accent: #b5cba2;
+  --wm-accent-ink: #10180c;
+  --wm-glass: rgba(0, 0, 0, 0.62);
+  --wm-sheet: rgba(0, 0, 0, 0.94);
+  background: var(--wm-bg);
+  color: var(--wm-ink);
+  font-family: 'Avenir Next', 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+/* Daylight variant: the feather stays on black (see theme.ts); the chrome turns to paper. */
+.wb-mobileexp.wb-light {
+  --wm-ink: #10180c;
+  --wm-muted: #526c54;
+  --wm-dim: #7c8878;
+  --wm-line: #cfd6c4;
+  --wm-accent: #526c54;
+  --wm-accent-ink: #f0f1e9;
+  --wm-glass: rgba(240, 241, 233, 0.86);
+  --wm-sheet: rgba(240, 241, 233, 0.97);
+}
+.wb-mobileexp button { font-family: inherit; -webkit-tap-highlight-color: transparent; }
+.wb-mobileexp button:focus-visible, .wb-mobileexp input:focus-visible { outline: 2px solid var(--wm-accent); outline-offset: 3px; }
+
+/* ── Brand overline, top-left ─────────────────────────────────────────── */
+.wb-mx-brand {
+  position: fixed; top: 8px; left: 12px; z-index: 135; height: 38px;
+  display: flex; align-items: center; gap: 10px;
+  font: 10px/1 ui-monospace, SFMono-Regular, monospace; letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--wm-muted); pointer-events: none;
+}
+.wb-mx-brand b { font-weight: 500; color: var(--wm-ink); letter-spacing: 0.12em; }
+.wb-mx-brand i { font-style: normal; color: var(--wm-dim); }
+
+/* ── Top-right icon row ───────────────────────────────────────────────── */
+.wb-mobileexp .wb-mx-top { top: 8px; right: 10px; gap: 5px; }
+.wb-mobileexp .wb-mx-icon {
+  width: 38px; height: 38px; border-radius: 5px; font-size: 16px;
+  background: var(--wm-glass); border: 1px solid var(--wm-line); color: var(--wm-ink);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.wb-mobileexp .wb-mx-icon:active { transform: translateY(1px); }
+.wb-mobileexp .wb-mx-icon.on { border-color: var(--wm-accent); color: var(--wm-accent); background: color-mix(in srgb, var(--wm-accent) 12%, var(--wm-glass)); }
+
+/* ── Live device meters (HUD) — below the icon row, full width ─────────── */
+.wb-mobileexp .wb-hud {
+  display: flex; top: 54px; left: 12px; right: 12px; gap: 10px; padding: 8px 12px;
+  background: var(--wm-glass); border: 1px solid var(--wm-line); border-radius: 5px;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.wb-mobileexp .wb-hud-label { font: 9px/1 ui-monospace, SFMono-Regular, monospace; letter-spacing: 0.14em; font-weight: 500; color: var(--wm-accent); }
+.wb-mobileexp .wb-hud-cell.off .wb-hud-label { color: var(--wm-dim); }
+.wb-mobileexp .wb-hud-bar { height: 3px; border-radius: 0; background: var(--wm-line); }
+.wb-mobileexp .wb-hud-fill { background: var(--wm-accent); }
+
+/* ── Quick-controls popover ───────────────────────────────────────────── */
+.wb-mobileexp .wb-mx {
+  top: 54px; right: 10px; left: 10px; width: auto; max-width: 380px; margin-left: auto;
+  background: var(--wm-sheet); border: 1px solid var(--wm-line); border-radius: 5px; padding: 16px 14px 18px;
+  gap: 10px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.wb-mobileexp .wb-mx-head {
+  font: 10px/1.6 ui-monospace, SFMono-Regular, monospace; letter-spacing: 0.18em; color: var(--wm-muted);
+  padding-bottom: 10px; border-bottom: 1px solid var(--wm-line);
+}
+.wb-mobileexp .wb-mx-sec { font: 9px/1.6 ui-monospace, SFMono-Regular, monospace; letter-spacing: 0.18em; color: var(--wm-dim); margin-top: 6px; }
+.wb-mobileexp .wb-mx-rowlabel { font: 10px/1 ui-monospace, SFMono-Regular, monospace; color: var(--wm-muted); }
+.wb-mobileexp .wb-mx-cell {
+  padding: 9px 0; border-radius: 4px; background: transparent; border: 1px solid var(--wm-line);
+  color: var(--wm-muted); font-size: 11px; letter-spacing: 0.02em;
+}
+.wb-mobileexp .wb-mx-cell.sel { background: var(--wm-accent); border-color: var(--wm-accent); color: var(--wm-accent-ink); box-shadow: none; }
+.wb-mobileexp .wb-mx .wb-ctl-slider { accent-color: var(--wm-accent); height: 30px; }
+
+/* ── Buttons inside the mobile experience ─────────────────────────────── */
+.wb-mobileexp .wb-btn {
+  background: transparent; border: 1px solid var(--wm-line); color: var(--wm-ink);
+  font-size: 12px; letter-spacing: 0; text-transform: none; padding: 12px 14px; border-radius: 5px;
+  box-shadow: none; text-align: left; white-space: normal;
+}
+.wb-mobileexp .wb-btn:hover { border-color: var(--wm-muted); color: var(--wm-ink); }
+.wb-mobileexp .wb-btn.active { background: var(--wm-accent); border-color: var(--wm-accent); color: var(--wm-accent-ink); box-shadow: none; }
+.wb-mobileexp .wb-btn.accent { border-color: var(--wm-accent); color: var(--wm-accent); }
+
+/* ── Bottom sheets (devices, camera panels) ───────────────────────────── */
+.wb-mobileexp .wb-panels:not(:empty) {
+  background: var(--wm-sheet); border-top: 1px solid var(--wm-line); border-radius: 5px 5px 0 0; padding: 12px;
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.wb-mobileexp .wb-camera-frame { bottom: 104px; right: 10px; border-radius: 5px; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5); }
+
+/* ── Collection strip ─────────────────────────────────────────────────── */
+.wb-mobileexp .wb-collection-exp {
+  gap: 8px; padding: 14px 12px 12px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.92), rgba(0, 0, 0, 0));
+}
+.wb-mobileexp.wb-light .wb-collection-exp { background: linear-gradient(to top, rgba(0, 0, 0, 0.88), rgba(0, 0, 0, 0)); }
+.wb-mobileexp .wb-feather { border: 1px solid #303a29; border-radius: 4px; background: #000; }
+.wb-mobileexp .wb-feather.active { border-color: #b5cba2; box-shadow: 0 0 0 1px #b5cba2; }
+.wb-mobileexp .wb-feather-proc { color: #b5cba2; }
+.wb-mobileexp .wb-collection-more { font: 10px/1 ui-monospace, SFMono-Regular, monospace; letter-spacing: 0.12em; color: #a4ad9c; }
+
+/* ── First-time welcome ───────────────────────────────────────────────── */
+.wb-mobileexp .wb-modal-overlay { background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.wb-mobileexp .wb-modal-content {
+  background: var(--wm-sheet); border: 1px solid var(--wm-line); border-radius: 5px; padding: 28px 24px 24px;
+  width: min(92vw, 360px); box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
+}
+.wb-mobileexp .wb-modal-over { font: 10px/1.6 ui-monospace, SFMono-Regular, monospace; letter-spacing: 0.18em; color: var(--wm-muted); margin-bottom: 18px; }
+.wb-mobileexp .wb-modal-head { font-size: 30px; font-weight: 500; letter-spacing: -0.05em; line-height: 1.05; color: var(--wm-ink); margin-bottom: 14px; }
+.wb-mobileexp .wb-modal-text { font-size: 15px; line-height: 1.55; color: var(--wm-muted); margin-bottom: 22px; }
+.wb-mobileexp .wb-modal-buttons { gap: 8px; }
+.wb-mobileexp .wb-modal-buttons .wb-btn { display: flex; justify-content: space-between; align-items: center; font-size: 15px; padding: 15px 16px; }
+.wb-mobileexp .wb-modal-buttons .wb-btn span { color: var(--wm-muted); font-size: 18px; }
+.wb-mobileexp .wb-modal-buttons .wb-btn.primary { background: var(--wm-accent); border-color: var(--wm-accent); color: var(--wm-accent-ink); }
+.wb-mobileexp .wb-modal-buttons .wb-btn.primary span { color: var(--wm-accent-ink); }
+.wb-mobileexp .wb-modal-buttons .wb-btn.quiet { border-color: transparent; color: var(--wm-muted); justify-content: center; padding: 10px; }

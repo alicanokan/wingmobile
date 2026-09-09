@@ -54,6 +54,10 @@ unsigned long lastMotionPubMs = 0;
 unsigned long lastStatusMs    = 0;
 unsigned long lastPirHighMs   = 0;
 bool          presentLast     = false;
+unsigned long lastLedCommandMs = 0;
+unsigned long ledCommandTtlMs  = 0;
+uint32_t      lastLedSequence  = 0;
+String        lastLedSource    = "";
 
 // MQTT topic helpers --------------------------------------------------------
 String topicStatus()    { return String("wingbeat/node/") + NODE_ID + "/status"; }
@@ -103,6 +107,20 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
 
   String t = topic;
   if (t == topicCmdLed()) {
+    unsigned long now = millis();
+    const char* src = d["src"] | "legacy";
+    uint32_t seq = d["seq"] | 0;
+    unsigned long ttl = d["ttlMs"] | 3500UL;
+    if (ttl < 100) ttl = 100;
+    if (ttl > 10000) ttl = 10000;
+    // Reject an out-of-order packet while the current publisher lease is live.
+    // After expiry, a restarted browser may safely begin its sequence at 1.
+    if (seq && lastLedSource == src && seq <= lastLedSequence &&
+        now - lastLedCommandMs < ledCommandTtlMs) return;
+    lastLedSource = src;
+    lastLedSequence = seq;
+    lastLedCommandMs = now;
+    ledCommandTtlMs = ttl;
     if (d.containsKey("r")) ledState.r = d["r"];
     if (d.containsKey("g")) ledState.g = d["g"];
     if (d.containsKey("b")) ledState.b = d["b"];
@@ -337,6 +355,13 @@ void setup() {
 void loop() {
   if (!mqtt.connected()) connectMqtt();
   mqtt.loop();
+
+  // A disconnected browser/broker must never leave an installation strip
+  // frozen in an active state.
+  if (ledCommandTtlMs && millis() - lastLedCommandMs > ledCommandTtlMs) {
+    ledCommandTtlMs = 0;
+    ledState.mode = LedState::OFF;
+  }
 
   // ---- Wind / breath ----
   float w = readWindNormalized();

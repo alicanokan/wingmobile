@@ -8,13 +8,15 @@
 //    · PRESETS  — recall the configs saved in /conductor (rig + loops + scene)
 //    · CONTROL  — QR codes so phones join as controllers (dev1..dev5 → parts)
 //    · MIX      — layer mixer with a master fader
+//    · PLAY     — the living feather: each trigger channel drives one part of
+//                 the feather with a chosen movement, strength and speed
 //
 //  One sheet open at a time; the feather stays the star. Live pushes from
 //  /conductor still land here (useConductorSync), so the page follows the
 //  installation. Deliberately dark-only: it wraps the projection surface.
 // ============================================================================
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { useRigTick } from './useRig.ts';
 import './ui.css';
 import './experience.css';
@@ -25,14 +27,24 @@ import { SimTransport } from '../transports/SimTransport.ts';
 import { Projection } from './Projection.tsx';
 import { FEATHERS, DEFAULT_FEATHER } from './feathers.ts';
 import { SENSOR_CHANNELS } from './channels.ts';
-import { rig } from './rig.ts';
+import { rig, onRigChange } from './rig.ts';
 import { startHost, type ChannelAd, type Control, type HostHandle, type HostMsg, type LinkStatus } from '../net/link.ts';
-import { saveJson } from './persisted.ts';
+import { loadJson, saveJson } from './persisted.ts';
+import { PLAY_EFFECTS, PLAY_PARTS, playChannelsFromClassic, validatePlayChannels, type FeatherPlay, type PlayChannel } from '../feather2/play.ts';
 import { useConductorSync, applyConductorConfig } from '../net/liveSync.ts';
 import { listCloudPresets, type CloudPreset } from '../net/cloud.ts';
 import { DEVICE_COUNT } from './inputs.ts';
 
-type Sheet = 'feather' | 'presets' | 'control' | 'mix' | null;
+// The studio renderer pulls three.js and the anatomy engine; load it only
+// when the living feather is on screen.
+const Feather2 = lazy(() => import('../feather2/Feather2.tsx'));
+
+type Sheet = 'feather' | 'presets' | 'control' | 'mix' | 'play' | null;
+type Renderer = 'living' | 'classic';
+const RENDERER_KEY = 'wb.xpRenderer.v1';
+const PLAY_KEY = 'wb.xpPlay.v1';
+/** Level of a simulated held finger — the phone pad's own hold level. */
+const TEST_HOLD_LEVEL = 0.7;
 
 // Each phone slot drives one feather part, fixed 1:1 (dev1→Tip … dev5→Tail):
 // no routing matrix here — that's what the console is for.
@@ -74,6 +86,58 @@ export default function Experience() {
   const [masterGain, setMasterGain] = useState(0.7);
   const [sheet, setSheet] = useState<Sheet>(null);
   const rerender = useRigTick(); // mixer + rig rerender
+
+  // ---- the living feather ------------------------------------------------
+  // The studio's renderer replaces the classic particle projection. Each of
+  // the five trigger channels drives one part of the feather with one
+  // movement; the pump below writes the live level, the renderer envelopes it.
+  const [renderer, setRenderer] = useState<Renderer>(() => loadJson(RENDERER_KEY, (raw) => (raw === 'classic' ? 'classic' : 'living')));
+  useEffect(() => saveJson(RENDERER_KEY, renderer), [renderer]);
+  // First run: mirror the classic rig (its motion shapes and reach), so the
+  // living feather plays the way the installation was already tuned.
+  const classicChannels = () => playChannelsFromClassic(SLOT_PART.map((id) => rig.sensors[id]), DEVICE_COUNT);
+  const play = useMemo<FeatherPlay>(() => ({
+    levels: Array(DEVICE_COUNT).fill(0),
+    channels: loadJson(PLAY_KEY, (raw) => (raw === undefined ? classicChannels() : validatePlayChannels(raw, DEVICE_COUNT))),
+    // levels are shaped below with the rig's attack/release, exactly like the
+    // classic particles — hold sustains, release lets go at the rig's rate
+    enveloped: true,
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [, setPlayTick] = useState(0);
+  const [playChannel, setPlayChannel] = useState(0);
+  // Until a channel is edited by hand, keep mirroring the rig: it loads after
+  // this page seeds, and conductor presets replace it live.
+  const followClassic = useRef(loadJson(PLAY_KEY, (raw) => raw === undefined));
+  useEffect(() => {
+    const sync = () => {
+      if (!followClassic.current) return;
+      play.channels.splice(0, play.channels.length, ...classicChannels());
+      setPlayTick((t) => t + 1);
+    };
+    sync();
+    return onRigChange(sync);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [play]);
+  // Test switch per channel: a simulated held finger (the phone pad's hold
+  // level), so a movement can be checked without a phone or a key.
+  const testHold = useRef<boolean[]>(Array(DEVICE_COUNT).fill(false));
+  const [testTick, setTestTick] = useState(0);
+  const toggleTest = (i: number) => {
+    testHold.current[i] = !testHold.current[i];
+    setTestTick((t) => t + 1);
+  };
+  const updateChannel = (i: number, patch: Partial<PlayChannel>) => {
+    followClassic.current = false;
+    Object.assign(play.channels[i], patch);
+    saveJson(PLAY_KEY, play.channels);
+    setPlayTick((t) => t + 1);
+  };
+  const matchClassic = () => {
+    followClassic.current = false;
+    play.channels.splice(0, play.channels.length, ...classicChannels());
+    saveJson(PLAY_KEY, play.channels);
+    setPlayTick((t) => t + 1);
+  };
 
   const chooseFeather = (id: string) => {
     setFeather(id);
@@ -265,8 +329,8 @@ export default function Experience() {
 
   // Console-debuggable, same as the operator page.
   useEffect(() => {
-    (window as unknown as { xp?: object }).xp = { audio, engine, transport, rig, motion, keyAir };
-  }, [audio, engine, transport]);
+    (window as unknown as { xp?: object }).xp = { audio, engine, transport, rig, motion, keyAir, play };
+  }, [audio, engine, transport, play]);
   useEffect(() => {
     const onDown = (ev: KeyboardEvent) => {
       if (ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey) return;
@@ -296,6 +360,9 @@ export default function Experience() {
       const t = performance.now();
       const dt = Math.min(0.25, (t - last) / 1000);
       last = t;
+      // frames of the classic per-frame envelope (rate per 60 Hz frame) that
+      // fit in this tick, so both renderers feel the same at any tick rate
+      const frames = dt * 60;
       for (let i = 0; i < SLOT_PART.length; i++) {
         const id = SLOT_PART[i];
         const sens = rig.sensors[id]?.sensitivity ?? 1;
@@ -305,7 +372,15 @@ export default function Experience() {
           keyAir.current[i] = Math.max(0, keyAir.current[i] - dt * (0.2 + rel * 5));
         }
         // phone motion and key air both drive the part — loudest wins
-        const v = Math.min(1, Math.max((motion.current[i] ?? 0) * sens, keyAir.current[i]));
+        // phone motion, key air and the test switch all drive the part — loudest wins
+        const v = Math.min(1, Math.max((motion.current[i] ?? 0) * sens, keyAir.current[i], testHold.current[i] ? TEST_HOLD_LEVEL * sens : 0));
+        // The living feather gets the same ATTACK/RELEASE envelope the classic
+        // particles apply (readChannelEnergies in Projection): a held finger
+        // sustains, a release lets go at the sensor's own rate.
+        const s = rig.sensors[id];
+        const env = s?.modules.release;
+        const rate = v > play.levels[i] ? (env ? s.attack : rig.global.attack) : env ? s.release : rig.global.release;
+        play.levels[i] += (v - play.levels[i]) * (1 - Math.pow(1 - Math.min(1, rate), frames));
         if (v > 0.001) {
           transport.holdWind(id, v);
           transport.setPresence(id, v > 0.05);
@@ -320,12 +395,14 @@ export default function Experience() {
     const timer = setInterval(loop, 33);
     return () => {
       clearInterval(timer);
+      play.levels.fill(0);
+      testHold.current.fill(false);
       driven.forEach((id) => {
         transport.releaseWind(id);
         transport.setPresence(id, false);
       });
     };
-  }, [transport]);
+  }, [transport, play]);
 
   // ---- presets from /conductor -------------------------------------------
   const [presets, setPresets] = useState<CloudPreset[]>([]);
@@ -368,7 +445,13 @@ export default function Experience() {
 
   return (
     <div className="xp">
-      <Projection engine={engine} audio={audio} featherId={feather} paused={false} />
+      {renderer === 'living' ? (
+        <Suspense fallback={null}>
+          <Feather2 embedded featherId={feather} play={play} />
+        </Suspense>
+      ) : (
+        <Projection engine={engine} audio={audio} featherId={feather} paused={false} />
+      )}
 
       {/* wordmark */}
       <header className="xp-mark">
@@ -402,7 +485,8 @@ export default function Experience() {
                 key={f.id}
                 className={`xp-feather ${feather === f.id ? 'active' : ''}`}
                 onClick={() => chooseFeather(f.id)}
-                title={f.label}
+                disabled={renderer === 'living' && !!f.procedural}
+                title={renderer === 'living' && f.procedural ? 'the living feather needs a photograph' : f.label}
               >
                 {f.procedural ? (
                   <span className="xp-feather-proc">✦</span>
@@ -580,6 +664,79 @@ export default function Experience() {
         </section>
       )}
 
+      {sheet === 'play' && (() => {
+        const ch = play.channels[playChannel];
+        const part = PLAY_PARTS.find((p) => p.id === ch.part) ?? PLAY_PARTS[0];
+        return (
+          <section className="xp-sheet" data-accent="play" data-test-tick={testTick}>
+            <h2>
+              Play <em>a trigger moves one part</em>
+            </h2>
+            <div className="xp-play-channels">
+              {play.channels.map((c, i) => (
+                <PlayChannelChip
+                  key={i}
+                  label={SENSOR_CHANNELS[i]?.label ?? `Channel ${i + 1}`}
+                  partKey={SENSOR_CHANNELS[i]?.key ?? ''}
+                  effect={PLAY_EFFECTS.find((e) => e.mode === c.mode)?.name ?? 'Still'}
+                  part={PLAY_PARTS.find((p) => p.id === c.part)?.label ?? c.part}
+                  on={i === playChannel}
+                  index={i}
+                  levels={play}
+                  onPick={() => setPlayChannel(i)}
+                  testing={testHold.current[i]}
+                  onTest={() => toggleTest(i)}
+                />
+              ))}
+            </div>
+            <div className="xp-play-heading">
+              <h3>{SENSOR_CHANNELS[playChannel]?.label ?? `Channel ${playChannel + 1}`} → {part.label}</h3>
+              <p>{part.hint}. Send from a phone joined to this channel, or press {(SENSOR_CHANNELS[playChannel]?.key ?? '').toUpperCase()}.</p>
+            </div>
+            <div className="xp-play-label">Part of the feather</div>
+            <div className="xp-play-pills" aria-label="Feather part">
+              {PLAY_PARTS.map((p) => (
+                <button key={p.id} aria-pressed={ch.part === p.id} onClick={() => updateChannel(playChannel, { part: p.id })}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="xp-play-label">Movement</div>
+            <div className="xp-play-pills" aria-label="Movement">
+              {PLAY_EFFECTS.map((e) => (
+                <button key={e.name} aria-pressed={ch.mode === e.mode} onClick={() => updateChannel(playChannel, { mode: e.mode, speed: e.speed })}>
+                  {e.name}
+                </button>
+              ))}
+            </div>
+            <label className="xp-play-slider">
+              <span>Strength<output>{Math.round((ch.strength / 2) * 100)}%</output></span>
+              <input type="range" min={0} max={2} step={0.01} value={ch.strength} onChange={(e) => updateChannel(playChannel, { strength: Number(e.target.value) })} />
+            </label>
+            <label className="xp-play-slider">
+              <span>Speed<output>{Math.round((ch.speed / 3) * 100)}%</output></span>
+              <input type="range" min={0} max={3} step={0.01} value={ch.speed} onChange={(e) => updateChannel(playChannel, { speed: Number(e.target.value) })} />
+            </label>
+            <div className="xp-note">
+              Hold to play: a held finger keeps the movement on, letting go releases it at this sensor’s attack / release from the console, the same envelope the classic particles use.
+            </div>
+            <div className="xp-play-label">Renderer</div>
+            <div className="xp-play-renderer">
+              <button aria-pressed={renderer === 'living'} onClick={() => setRenderer('living')}>Living feather</button>
+              <button aria-pressed={renderer === 'classic'} onClick={() => setRenderer('classic')}>Classic particles</button>
+            </div>
+            <button className="xp-play-match" onClick={matchClassic} title="swirl → Swirl · rise / scatter → Fly · wave → Wave · flutter / fall → Breathe · pulse → Pulse; reach → strength">
+              Match the classic movements
+            </button>
+            <div className="xp-note">
+              {renderer === 'living'
+                ? 'The feather, its masks and its resting movement come from the studio (/feather2). Still hands a part back to the studio’s own life.'
+                : 'Classic particles ignore these movements; switch to the living feather to play them.'}
+            </div>
+          </section>
+        );
+      })()}
+
       {/* dock */}
       <nav className="xp-dock">
         <button className={sheet === 'feather' ? 'on' : ''} data-accent="feather" onClick={() => toggle('feather')}>
@@ -594,6 +751,9 @@ export default function Experience() {
         </button>
         <button className={sheet === 'mix' ? 'on' : ''} data-accent="mix" onClick={() => toggle('mix')}>
           Mix
+        </button>
+        <button className={sheet === 'play' ? 'on' : ''} data-accent="play" onClick={() => toggle('play')}>
+          Play
         </button>
       </nav>
     </div>
@@ -668,6 +828,42 @@ function DeviceQr({
         <div className="xp-dev-wait">{status === 'error' ? 'error' : '…'}</div>
       )}
       {info && !connected && <div className="xp-dev-code">{info.code}</div>}
+    </div>
+  );
+}
+
+// One trigger channel in the Play sheet: what it drives, and a live level bar
+// read from the shared play levels at ~12 Hz (no per-frame React churn).
+function PlayChannelChip({ label, partKey, effect, part, on, index, levels, onPick, testing, onTest }: {
+  label: string;
+  partKey: string;
+  effect: string;
+  part: string;
+  on: boolean;
+  index: number;
+  levels: FeatherPlay;
+  onPick: () => void;
+  testing: boolean;
+  onTest: () => void;
+}) {
+  const bar = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (bar.current) bar.current.style.transform = `scaleX(${Math.max(0, Math.min(1, levels.levels[index] ?? 0))})`;
+    }, 80);
+    return () => clearInterval(id);
+  }, [levels, index]);
+  return (
+    <div className={`xp-play-channel ${on ? 'on' : ''} ${testing ? 'testing' : ''}`}>
+      <button className="xp-play-pick" aria-pressed={on} onClick={onPick}>
+        <b>{label}</b>
+        <small>{effect === 'Still' ? 'still' : `${effect} · ${part}`}</small>
+        {partKey && <kbd>{partKey.toUpperCase()}</kbd>}
+      </button>
+      <button className="xp-play-test" role="switch" aria-checked={testing} title={testing ? 'release the simulated finger' : 'hold a simulated finger on this channel'} onClick={onTest}>
+        <span /> test
+      </button>
+      <i ref={bar} />
     </div>
   );
 }

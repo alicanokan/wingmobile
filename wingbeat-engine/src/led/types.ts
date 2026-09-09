@@ -35,7 +35,14 @@ export type LedSourceKind =
  *  firmware ignores keys it doesn't know, and every other client on the
  *  broker can now tell the two pipelines apart. */
 export type LedSource = 'engine' | 'router' | 'identify';
-export type LedWire = LedCommand & { src?: LedSource };
+export type LedWire = LedCommand & {
+  src?: LedSource;
+  /** Monotonic per-publisher sequence for stale-message rejection. */
+  seq?: number;
+  sentAt?: number;
+  /** Receiver should return to its safe fallback after this age. */
+  ttlMs?: number;
+};
 
 /**
  * The arbitration seam between the two LED pipelines. The engine's transport

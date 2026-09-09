@@ -99,6 +99,7 @@ class LedService implements LedArbiter {
   private identifyUntil = new Map<NodeId, number>();
   /** last time a ROUTER-tagged packet was seen on the wire, per node */
   private routerSeen = new Map<NodeId, number>();
+  private wireSequence = new Map<string, number>();
 
   constructor() {
     this.router.setRate(this.config.rateHz);
@@ -223,6 +224,13 @@ class LedService implements LedArbiter {
   }
 
   noteWire(id: NodeId, cmd: LedWire): void {
+    if (cmd.seq !== undefined) {
+      const key = `${cmd.src ?? 'legacy'}:${id}`;
+      const previous = this.wireSequence.get(key);
+      if (previous !== undefined && cmd.seq <= previous) return;
+      this.wireSequence.set(key, cmd.seq);
+    }
+    if (cmd.sentAt !== undefined && cmd.ttlMs !== undefined && Date.now() - cmd.sentAt > cmd.ttlMs) return;
     if (cmd.src === 'router' || cmd.src === 'identify') this.routerSeen.set(id, performance.now());
   }
 

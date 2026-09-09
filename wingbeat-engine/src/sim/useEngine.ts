@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { WingbeatEngine } from '../engine/WingbeatEngine.ts';
-import type { NodeState } from '../engine/types.ts';
+import type { ExpressiveState, NodeState } from '../engine/types.ts';
 
 export interface EngineSnapshot {
   nodes: NodeState[];
@@ -10,6 +10,7 @@ export interface EngineSnapshot {
   feather: string;
   featherPalette: number[][];
   featherLayerCounts: number[];
+  expressive: ExpressiveState;
 }
 
 /**
@@ -26,6 +27,7 @@ export function useEngineSnapshot(engine: WingbeatEngine, fps = 30): EngineSnaps
     feather: engine.feather,
     featherPalette: engine.featherPalette,
     featherLayerCounts: engine.featherLayerCounts,
+    expressive: engine.getExpressiveState(),
   });
 
   // latest wind aggregate, captured off the bus
@@ -54,6 +56,7 @@ export function useEngineSnapshot(engine: WingbeatEngine, fps = 30): EngineSnaps
         feather: engine.feather,
         featherPalette: engine.featherPalette,
     featherLayerCounts: engine.featherLayerCounts,
+        expressive: engine.getExpressiveState(),
       });
     };
     raf = requestAnimationFrame(loop);

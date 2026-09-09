@@ -57,6 +57,8 @@ export class MqttTransport extends BaseTransport {
   /** per node: did the engine have the floor at the last sweep? */
   private hadFloor = new Map<NodeId, boolean>();
   private wasBlackout = false;
+  private sequence = 0;
+  private lastSensorTimestamp = new Map<string, number>();
 
   constructor(opts: MqttOptions) {
     super();
@@ -86,6 +88,8 @@ export class MqttTransport extends BaseTransport {
       if (this.opts.led) client.subscribe(topics.anyCmdLed, { qos: QOS.cmdStream });
       // Announce the engine's current scene so freshly-booted nodes sync up.
       this.publishScene(engine.scene);
+      if (this.opts.led) this.reassert(engine, this.opts.led);
+      else for (const node of engine.getNodes()) this.publishLed(node.id, node.led);
     });
 
     client.on('reconnect', () => this.setStatus('connecting'));
@@ -97,7 +101,8 @@ export class MqttTransport extends BaseTransport {
     // A node whose TCP session survives but whose packets stop (weak wifi,
     // brownout) never triggers the broker's LWT — the engine's own staleness
     // sweep is the only thing that turns its dot grey. Same cadence as sim.
-    this.staleTimer = setInterval(() => engine.tickStaleness(), 2000);
+    // Advances recovery/memory as well as checking stale hardware.
+    this.staleTimer = setInterval(() => engine.tick(), 50);
 
     // ---- Outbound: engine commands → MQTT ----
     this.detachers.push(
@@ -146,7 +151,7 @@ export class MqttTransport extends BaseTransport {
     this.detachers.push(
       engine.on('accent', () => {
         if (!client.connected) return;
-        const cmd: AudioCmdWire = { layer: 'accent', gain: 0.8, play: true };
+        const cmd: AudioCmdWire = { layer: 'accent', gain: 0.8, play: true, seq: ++this.sequence, ttlMs: 5000 };
         for (const node of engine.getNodes()) {
           if (node.role !== 'audio' || !node.online) continue;
           client.publish(topics.cmdAudio(node.id), JSON.stringify(cmd), { qos: QOS.cmdAudio });
@@ -157,7 +162,7 @@ export class MqttTransport extends BaseTransport {
 
   private publishLed(id: NodeId, cmd: LedCommand) {
     if (!this.client?.connected) return;
-    const wire: LedWire = { ...cmd, src: 'engine' };
+    const wire: LedWire = { ...cmd, src: 'engine', seq: ++this.sequence, sentAt: Date.now(), ttlMs: 3500 };
     this.client.publish(topics.cmdLed(id), JSON.stringify(wire), { qos: QOS.cmdEvent, retain: false });
   }
 
@@ -180,6 +185,7 @@ export class MqttTransport extends BaseTransport {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.staleTimer = this.sweepTimer = null;
     this.hadFloor.clear();
+    this.lastSensorTimestamp.clear();
     this.client?.end(true);
     this.client = null;
     super.disconnect();
@@ -203,14 +209,23 @@ export class MqttTransport extends BaseTransport {
     if (t.kind === 'status') {
       this.engine.ingestStatus(t.id, parseStatus(payload));
     } else if (t.kind === 'sensor') {
+      const sourceTimestamp = Number.isFinite(payload.ts) ? Number(payload.ts) : undefined;
+      if (sourceTimestamp !== undefined) {
+        const key = `${t.id}:${t.sensor}`;
+        const previous = this.lastSensorTimestamp.get(key);
+        // Small backwards jumps are stale QoS/reconnect packets. A large jump
+        // means the node rebooted and its millis() clock restarted.
+        if (previous !== undefined && sourceTimestamp <= previous && previous - sourceTimestamp < 10_000) return;
+        this.lastSensorTimestamp.set(key, sourceTimestamp);
+      }
       if (t.sensor === 'wind') {
         const v = parseSensorValue(payload.v);
-        if (v !== null) this.engine.ingestWind(t.id, v);
+        if (v !== null) this.engine.ingestWind(t.id, v, 'mqtt', undefined, sourceTimestamp);
       } else if (t.sensor === 'motion') {
         const mag = parseSensorValue(payload.mag);
-        if (mag !== null) this.engine.ingestMotion(t.id, mag);
+        if (mag !== null) this.engine.ingestMotion(t.id, mag, 'mqtt', undefined, sourceTimestamp);
       } else if (t.sensor === 'presence') {
-        this.engine.ingestPresence(t.id, Boolean(payload.present));
+        this.engine.ingestPresence(t.id, Boolean(payload.present), 'mqtt', undefined, sourceTimestamp);
       }
     }
   }

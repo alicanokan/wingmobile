@@ -826,6 +826,15 @@ export class AudioEngine {
       }),
     );
     this.detachers.push(
+      engine.on('expressive', ({ state }) => {
+        if (!this.ready || !this.running) return;
+        // Sound follows deformation consequences: yielding adds texture,
+        // coherent vane load opens the tone, and settling closes it slowly.
+        this.noiseGain.gain.rampTo(state.fringeLoad * 0.12, state.energy > 0.1 ? 0.04 : 0.7);
+        this.noiseFilter.frequency.rampTo(280 + state.vaneLoad * 1450, state.energy > 0.1 ? 0.12 : 0.9);
+      }),
+    );
+    this.detachers.push(
       engine.on('melody', ({ note, velocity, pan }) => {
         if (!this.ready) return;
         const rate = Tone.Frequency(note).toFrequency() / C4;

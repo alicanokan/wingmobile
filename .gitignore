@@ -29,3 +29,6 @@ dist-ssr/
 # Project specific
 .claude/
 *.txt
+
+# Audio test loops (too large for git, deployed from the local checkout)
+*.wav

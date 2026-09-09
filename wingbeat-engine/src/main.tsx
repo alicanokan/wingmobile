@@ -26,6 +26,7 @@ const ROUTES: Record<string, { label: string; el: () => ReactNode }> = {
   '/controller': { label: 'phone controller', el: () => <Controller /> },
   '/conductor': { label: 'conductor', el: () => <Conductor /> },
   '/experience': { label: 'experience', el: () => <Experience /> },
+  '/feather2.html': { label: 'feather studio', el: () => <Feather2 /> },
   '/feather2': { label: 'feather lab', el: () => <Feather2 /> },
 };
 

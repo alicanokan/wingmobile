@@ -102,6 +102,8 @@ export interface AudioCmdWire {
   gain?: number;
   play?: boolean;
   loop?: boolean;
+  seq?: number;
+  ttlMs?: number;
 }
 
 /** wingbeat/global/scene — retained; carries the LED tint so scene-aware
@@ -173,6 +175,9 @@ export function parseLedCmd(p: Record<string, unknown>): LedCmdWire | null {
     intensity: clamp(num(p.intensity, 1), 0, 1),
     ...(src ? { src } : {}),
     ...(typeof p.brightness === 'number' ? { brightness: clamp(num(p.brightness, 1), 0, 1) } : {}),
+    ...(typeof p.seq === 'number' ? { seq: Math.max(0, Math.floor(p.seq)) } : {}),
+    ...(typeof p.sentAt === 'number' ? { sentAt: p.sentAt } : {}),
+    ...(typeof p.ttlMs === 'number' ? { ttlMs: clamp(p.ttlMs, 100, 10_000) } : {}),
   };
 }
 
@@ -202,11 +207,11 @@ export const WIRE_DOC: readonly WireDocEntry[] = [
     example: '{"present":true,"distance_cm":120,"ts":12345678}',
     notes: 'Edge-triggered, retained. The node publishes {"present":false} on boot so a retained `true` from a previous life is cleared. `distance_cm` is optional (PIR nodes omit it).' },
   { topic: 'wingbeat/node/<id>/cmd/led', direction: 'browser → node', qos: QOS.cmdEvent, retain: false,
-    example: '{"mode":"solid","r":120,"g":40,"b":200,"intensity":0.8,"src":"router","brightness":1}',
-    notes: '`mode` ∈ off · solid · pulse · shimmer · wind · rainbow. `intensity` 0..1. `src` says which pipeline sent it (engine = event-driven modes at QoS 1; router = the solid-colour stream at QoS 0; identify = the operator\'s white flash) — the two pipelines arbitrate per node on this tag (led/types.ts LedArbiter). `brightness` 0..1 caps the whole strip (firmware ≥ 0.2). Feather/plant nodes only.' },
+    example: '{"mode":"solid","r":120,"g":40,"b":200,"intensity":0.8,"src":"router","seq":42,"ttlMs":3500}',
+    notes: '`mode` ∈ off · solid · pulse · shimmer · wind · rainbow. `src` identifies the publisher. `seq` rejects stale packets and `ttlMs` makes firmware return to off after publisher loss. `brightness` 0..1 optionally caps the strip. Feather/plant nodes only.' },
   { topic: 'wingbeat/node/<id>/cmd/audio', direction: 'browser → node', qos: QOS.cmdAudio, retain: false,
-    example: '{"layer":"accent","gain":0.8,"play":true}',
-    notes: 'Audio-role nodes only. `layer` ∈ bed · melody · perc · accent; `loop` defaults to true for bed. The engine sends `accent` to every online audio node on a presence onset.' },
+    example: '{"layer":"accent","gain":0.8,"play":true,"seq":43,"ttlMs":5000}',
+    notes: 'Audio-role nodes only. `layer` ∈ bed · melody · perc · accent; `loop` defaults to true for bed. Commanded playback returns to silence when its TTL expires.' },
   { topic: 'wingbeat/global/scene', direction: 'browser → all nodes', qos: QOS.scene, retain: true,
     example: '{"scene":"crane_ghana","fade_ms":2500,"led":{"r":60,"g":200,"b":130}}',
     notes: 'Retained, so a freshly booted node syncs to the current pack. `led` is the pack tint for firmware that wants to react without a table.' },
