@@ -42,10 +42,7 @@ export function Landing({ onPick }: { onPick: (m: EntryMode) => void }) {
         <h1 id="wing-title">Give the air<br />a shape.</h1>
         <p>Create a feather. Send a little air.<br />Leave a movement behind.</p>
         <a className="wing-cta" href="/feather2">Enter studio <span>↗</span></a>
-        <div className="wing-cta-row">
-          <a className="wing-cta wing-cta-ghost" href="/experience">Experience <span>↗</span></a>
-          <a className="wing-cta wing-cta-ghost" href="/?mode=mobile" onClick={(event) => { event.preventDefault(); onPick('mobile'); }}>Mobile <span>↗</span></a>
-        </div>
+        <a className="wing-cta wing-cta-ghost" href="/experience">Experience <span>↗</span></a>
       </div>
       <div className="wing-hero-foot"><a href="#practice">Discover the practice ↓</a><button onClick={() => { if (playing) video.current?.pause(); else void video.current?.play().catch(() => setPlaying(false)); }}>{playing ? 'Pause movement' : 'Play movement'} <span>{playing ? 'Ⅱ' : '▷'}</span></button></div>
     </section>

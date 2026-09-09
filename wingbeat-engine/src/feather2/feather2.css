@@ -1999,3 +1999,18 @@
 /* Embedded in another page (/experience): a plain full-bleed stage under the host's own chrome. */
 .f2.f2-embedded { position:absolute; z-index:0; background:#000; }
 .f2.f2-embedded .f2-stage-loading { color:#a4ad9c; }
+
+/* Feather presets: name + save, then the saved looks. */
+.f2-presets { margin: 0 0 22px; padding: 0 0 18px; border-bottom: 1px solid #262c22; }
+.f2-presets-save { display: flex; gap: 8px; margin: 10px 0 12px; }
+.f2-presets-save input { flex: 1; min-width: 0; padding: 10px 12px; background: #0e120c; color: #e6ebdf; border: 1px solid #30392a; border-radius: 5px; font: inherit; font-size: 13px; }
+.f2-presets-save input:focus { outline: none; border-color: #a7bd91; }
+.f2-presets-list { display: grid; gap: 6px; }
+.f2-presets-item { display: flex; align-items: stretch; border: 1px solid #2e3528; border-radius: 6px; overflow: hidden; }
+.f2-presets-item.active { border-color: #a7bd91; background: #1b2315; }
+.f2-presets-load { flex: 1; min-width: 0; padding: 9px 12px; background: transparent; border: 0; color: #e2e9d8; text-align: left; cursor: pointer; font: inherit; }
+.f2-presets-load strong { display: block; font-size: 13px; font-weight: 500; }
+.f2-presets-load small { display: block; margin-top: 2px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: #7e8c70; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.f2-presets-load:hover { background: rgba(181, 203, 162, 0.06); }
+.f2-presets-delete { width: 36px; background: transparent; border: 0; border-left: 1px solid #2e3528; color: #7e8c70; cursor: pointer; font-size: 12px; }
+.f2-presets-delete:hover { color: #e6ebdf; }

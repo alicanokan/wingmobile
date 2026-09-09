@@ -81,6 +81,8 @@ import { defaultInteractionZones, initialInteractionZoneState, mixRoutedInteract
 import { defaultAnalysisMasters, groupIdForLayer, restoreAnalysisMasters, seedMasterRoutes } from './zoneMasters.ts';
 import { EncounterModel } from '../engine/encounter.ts';
 import { playPartMatches, type FeatherPlay } from './play.ts';
+import { deleteFeatherPreset, loadFeatherPresets, newPresetId, onFeatherPresetsChange, upsertFeatherPreset, type FeatherPreset, type FeatherView } from './presets.ts';
+import { PresetsPanel } from './PresetsPanel.tsx';
 
 // scan + response settings survive reloads, so a tuned analysis is kept
 const SENS_KEY = 'f2.sensitivity';
@@ -94,9 +96,9 @@ function loadParticleCount() {
   const n = Number(readPreference(PARTICLE_KEY) ?? 140_000);
   return Number.isFinite(n) ? Math.max(24_000, Math.min(500_000, Math.round(n))) : 140_000;
 }
-function loadLayers(): LayerControls {
+function loadLayers(raw: string | null = readPreference(LAYERS_KEY)): LayerControls {
   try {
-    const saved = JSON.parse(readPreference(LAYERS_KEY) ?? '{}') as Partial<LayerControls>;
+    const saved = JSON.parse(raw ?? '{}') as Partial<LayerControls>;
     if (Array.isArray(saved.layers)) {
       const groups = Array.isArray(saved.groups) && saved.groups.length ? saved.groups.map((group) => ({
         ...group,
@@ -159,10 +161,10 @@ function detectedLayers(anatomy: Anatomy, source: string): LayerControls {
   return { source, selectedId: groups[0]?.id ?? '', layers, groups };
 }
 
-function loadInteractionZones(): InteractionZoneDocument {
+function loadInteractionZones(raw: string | null = readPreference(ZONES_KEY)): InteractionZoneDocument {
   const defaults = defaultInteractionZones();
   try {
-    const saved = JSON.parse(readPreference(ZONES_KEY) ?? '{}') as Partial<InteractionZoneDocument>;
+    const saved = JSON.parse(raw ?? '{}') as Partial<InteractionZoneDocument>;
     if (Array.isArray(saved.zones) && saved.zones.length) return {
       selectedId: typeof saved.selectedId === 'string' ? saved.selectedId : saved.zones[0].id,
       zones: saved.zones.map((zone, index) => {
@@ -226,10 +228,10 @@ function savePreference(key: string, value: unknown) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* storage is optional */ }
 }
 
-function loadResponse(): ResponseSettings {
+function loadResponse(raw: string | null = readPreference('f2.response')): ResponseSettings {
   const base = { ...RESPONSE_PRESETS.organic };
   try {
-    const saved = JSON.parse(readPreference('f2.response') ?? '{}');
+    const saved = JSON.parse(raw ?? '{}');
     for (const [key, min, max] of [['gain', 0, 2], ['attack', 5, 400], ['release', 50, 1500], ['wind', 0, 2]] as const) {
       if (typeof saved[key] === 'number' && Number.isFinite(saved[key])) base[key] = Math.max(min, Math.min(max, saved[key]));
     }
@@ -246,10 +248,10 @@ type Amps = {
   fringe: number;
   depth: number;
 };
-function loadAmps(): Amps {
+function loadAmps(raw: string | null = readPreference(AMPS_KEY)): Amps {
   const amps: Amps = { eye: 1, color: 1, wave: 1, shimmer: 1, flex: 1, fringe: 1, depth: 0.6 };
   try {
-    const saved = JSON.parse(readPreference(AMPS_KEY) ?? '{}') as Partial<Amps>;
+    const saved = JSON.parse(raw ?? '{}') as Partial<Amps>;
     for (const k of Object.keys(amps) as (keyof Amps)[]) {
       const v = Number(saved[k]);
       if (Number.isFinite(v)) amps[k] = Math.max(0, Math.min(2, v));
@@ -276,10 +278,10 @@ const LOOK_KEY = 'f2.look';
 
 /** Point-cloud appearance and camera behaviour — all per-browser, all saved. */
 type Look = { size: number; soft: number; alpha: number; volume: number; thickness: number; particleShape: number; connection: number; radiance: number; tail: number; blendMode: number; taper: number; centreSize: number; tipSize: number; motionBlur: number; roughness: number; reflection: number; metalness: number; bloom: number; dof: number; aberr: number; spin: boolean; ghost: boolean };
-function loadLook(): Look {
+function loadLook(raw: string | null = readPreference(LOOK_KEY)): Look {
   const look: Look = { size: 0.85, soft: 0.65, alpha: 0.92, volume: 0.8, thickness: 0, particleShape: 2, connection: 0.45, radiance: 1, tail: 0, blendMode: 0, taper: 1, centreSize: 1.32, tipSize: 0.10, motionBlur: 0.25, roughness: 0.35, reflection: 0.25, metalness: 0, bloom: 0.3, dof: 0.15, aberr: 0.25, spin: false, ghost: false };
   try {
-    const saved = JSON.parse(readPreference(LOOK_KEY) ?? '{}') as Partial<Look>;
+    const saved = JSON.parse(raw ?? '{}') as Partial<Look>;
     for (const k of ['size', 'soft', 'alpha', 'volume', 'thickness', 'particleShape', 'connection', 'radiance', 'tail', 'blendMode', 'taper', 'centreSize', 'tipSize', 'motionBlur', 'roughness', 'reflection', 'metalness', 'bloom', 'dof', 'aberr'] as const) {
       const v = Number(saved[k]);
       if (Number.isFinite(v)) look[k] = Math.max(0, Math.min(k === 'particleShape' ? 10 : k === 'radiance' ? 8 : 3, v));
@@ -637,9 +639,11 @@ export interface Feather2Props {
   featherId?: string;
   /** Live play contract: per-channel trigger levels and the part/movement each drives. */
   play?: FeatherPlay;
+  /** A saved studio look to recall (applied whenever its id changes). */
+  preset?: FeatherPreset | null;
 }
 
-export default function Feather2({ embedded = false, featherId, play }: Feather2Props = {}) {
+export default function Feather2({ embedded = false, featherId, play, preset }: Feather2Props = {}) {
   const [source, setSource] = useState<Specimen>(() => FEATHERS.find((f) => !f.procedural)!);
   // The render loop reads these through refs, so a host can change them
   // without rebuilding the scene.
@@ -647,6 +651,14 @@ export default function Feather2({ embedded = false, featherId, play }: Feather2
   playRef.current = play;
   const embeddedRef = useRef(embedded);
   embeddedRef.current = embedded;
+  // Saved looks (see presets.ts). The camera lives inside the scene effect, so
+  // it is reached through viewRef; a view that arrives before the scene exists
+  // (or while a new feather is being analysed) waits in pendingView.
+  const [presets, setPresets] = useState<FeatherPreset[]>(loadFeatherPresets);
+  const [activePreset, setActivePreset] = useState<string | null>(null);
+  useEffect(() => onFeatherPresetsChange(() => setPresets(loadFeatherPresets())), []);
+  const viewRef = useRef<{ get: () => FeatherView | null; set: (view: FeatherView) => void } | null>(null);
+  const pendingView = useRef<FeatherView | null>(null);
   const [error, setError] = useState('');
   const [showShaftTrace, setShowShaftTrace] = useState(false);
   const [advancedControls, setAdvancedControls] = useState(false);
@@ -827,6 +839,65 @@ export default function Feather2({ embedded = false, featherId, play }: Feather2
     if (item && item.src !== source.src) pick(item.src, item.label);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [featherId]);
+
+  // ---- feather presets ----------------------------------------------------
+  const capturePreset = (name: string): FeatherPreset => ({
+    id: newPresetId(),
+    name,
+    feather: FEATHERS.find((f) => !f.procedural && f.src === source.src)?.id ?? null,
+    source: source.src.startsWith('blob:') ? null : source.src,
+    label: sourceName,
+    savedAt: Date.now(),
+    scene: {
+      layers: layerControls.current,
+      behaviours: interactionZones.current,
+      response: response.current,
+      amplitudes: amps.current,
+      appearance: look.current,
+      particleCount,
+      sensitivity: sens,
+      surfaceBlend,
+      flight,
+      view: viewRef.current?.get() ?? null,
+    },
+  });
+  // Everything goes through the same validation as a page load. Embedded in
+  // /experience the studio's own working state is left untouched.
+  const applyPreset = (p: FeatherPreset) => {
+    const json = (v: unknown) => (v == null ? null : JSON.stringify(v));
+    layerControls.current = loadLayers(json(p.scene.layers));
+    interactionZones.current = loadInteractionZones(json(p.scene.behaviours));
+    response.current = loadResponse(json(p.scene.response));
+    amps.current = loadAmps(json(p.scene.amplitudes));
+    look.current = loadLook(json(p.scene.appearance));
+    seedMasterRoutes(interactionZones.current, layerControls.current.groups);
+    if (!embedded) {
+      savePreference(LAYERS_KEY, layerControls.current);
+      savePreference(ZONES_KEY, interactionZones.current);
+      savePreference('f2.response', response.current);
+      savePreference(AMPS_KEY, amps.current);
+      savePreference(LOOK_KEY, look.current);
+    }
+    // the layers effect keeps these masks only while the version marker matches
+    savePreference(LAYERS_VERSION_KEY, LAYERS_VERSION);
+    const sameScan = (!p.source || p.source === source.src) && p.scene.particleCount === particleCount && p.scene.sensitivity === sens;
+    setParticleCount(p.scene.particleCount);
+    setSens(p.scene.sensitivity);
+    setSurfaceBlend(p.scene.surfaceBlend);
+    setFlight({ ...p.scene.flight });
+    pendingView.current = p.scene.view;
+    if (p.source && p.source !== source.src) pick(p.source, p.label);
+    else if (sameScan && p.scene.view && viewRef.current) {
+      viewRef.current.set(p.scene.view);
+      pendingView.current = null;
+    }
+    setActivePreset(p.id);
+    setAmpTick((tick) => tick + 1);
+  };
+  useEffect(() => {
+    if (preset) applyPreset(preset);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.id]);
 
   // ---- three.js scene -----------------------------------------------------
   useEffect(() => {
@@ -1091,6 +1162,11 @@ export default function Feather2({ embedded = false, featherId, play }: Feather2
       // the user grabbing the feather and mute the drift for two seconds after
       // every resize — and after mount, since ResizeObserver fires immediately
       lastTouch = -1e9;
+      if (pendingView.current && viewRef.current) {
+        const view = pendingView.current;
+        pendingView.current = null;
+        viewRef.current.set(view);
+      }
       // finer grain now the cloud is ~3× denser
       uniforms.uPointScale.value = (h / 240) * 3.0;
     };
@@ -1152,6 +1228,18 @@ export default function Feather2({ embedded = false, featherId, play }: Feather2
       camera.position.set(0, targetY, framed * scale);
       controls.update();
       lastTouch = performance.now();
+    };
+    // Camera in framing-relative units, so a saved angle and zoom read the same
+    // on a phone and a projector.
+    viewRef.current = {
+      get: () => framed > 0 ? { position: [camera.position.x / framed, camera.position.y / framed, camera.position.z / framed], target: [controls.target.x, controls.target.y, controls.target.z] } : null,
+      set: (view) => {
+        if (!(framed > 0)) { pendingView.current = view; return; }
+        camera.position.set(view.position[0] * framed, view.position[1] * framed, view.position[2] * framed);
+        controls.target.set(view.target[0], view.target[1], view.target[2]);
+        controls.update();
+        lastTouch = performance.now();
+      },
     };
     const ro = new ResizeObserver(fit);
     ro.observe(mount);
@@ -1616,6 +1704,7 @@ export default function Feather2({ embedded = false, featherId, play }: Feather2
       renderer.domElement.removeEventListener('lostpointercapture', up);
       window.removeEventListener('blur', up);
       resetView.current = null;
+      viewRef.current = null;
       ro.disconnect();
       inspectView.current = null;
       photo?.dispose();
@@ -1987,6 +2076,10 @@ export default function Feather2({ embedded = false, featherId, play }: Feather2
           if (next) { event.preventDefault(); setTab(next); document.getElementById(`f2-tab-${next}`)?.focus(); }
         }} onClick={() => setTab(id)}>{label}</button>)}</div>}
         <div className="f2-panel-content" id="f2-inspector-content" role={advancedControls ? "tabpanel" : undefined} aria-labelledby={advancedControls ? `f2-tab-${tab}` : undefined} tabIndex={0}>
+          {!embedded && <PresetsPanel presets={presets} activeId={activePreset} currentLabel={sourceName}
+            onSave={(name) => { const saved = capturePreset(name); setPresets(upsertFeatherPreset(saved)); setActivePreset(saved.id); }}
+            onLoad={applyPreset}
+            onDelete={(id) => { setPresets(deleteFeatherPreset(id)); if (activePreset === id) setActivePreset(null); }} />}
           <MusicLoopPanel player={musicPlayer} onStatus={() => setAudioTick(v => v + 1)} onStart={async index => {
             setDemo(false); feed.pauseFile(); feed.stopMic();
             const item = FEATHERS.find(feather => feather.id === LOOP_STYLES[index].feather);

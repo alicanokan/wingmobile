@@ -31,6 +31,7 @@ import { rig, onRigChange } from './rig.ts';
 import { startHost, type ChannelAd, type Control, type HostHandle, type HostMsg, type LinkStatus } from '../net/link.ts';
 import { loadJson, saveJson } from './persisted.ts';
 import { PLAY_EFFECTS, PLAY_PARTS, playChannelsFromClassic, validatePlayChannels, type FeatherPlay, type PlayChannel } from '../feather2/play.ts';
+import { loadFeatherPresets, onFeatherPresetsChange, type FeatherPreset } from '../feather2/presets.ts';
 import { useConductorSync, applyConductorConfig } from '../net/liveSync.ts';
 import { listCloudPresets, type CloudPreset } from '../net/cloud.ts';
 import { DEVICE_COUNT } from './inputs.ts';
@@ -421,6 +422,19 @@ export default function Experience() {
     setActivePreset(p.id);
   };
 
+  // ---- feather looks saved in the studio (/feather2, same device) ---------
+  const [studioPresets, setStudioPresets] = useState<FeatherPreset[]>(loadFeatherPresets);
+  const [studioPreset, setStudioPreset] = useState<FeatherPreset | null>(null);
+  useEffect(() => onFeatherPresetsChange(() => setStudioPresets(loadFeatherPresets())), []);
+  useEffect(() => {
+    if (sheet === 'presets') setStudioPresets(loadFeatherPresets());
+  }, [sheet]);
+  const pickStudioPreset = (p: FeatherPreset) => {
+    setRenderer('living');
+    if (p.feather) chooseFeather(p.feather);
+    setStudioPreset(p);
+  };
+
   const startAudio = async () => {
     await audio.init(masterGain);
     await audio.resume();
@@ -447,7 +461,7 @@ export default function Experience() {
     <div className="xp">
       {renderer === 'living' ? (
         <Suspense fallback={null}>
-          <Feather2 embedded featherId={feather} play={play} />
+          <Feather2 embedded featherId={feather} play={play} preset={studioPreset} />
         </Suspense>
       ) : (
         <Projection engine={engine} audio={audio} featherId={feather} paused={false} />
@@ -520,6 +534,19 @@ export default function Experience() {
                 </button>
               );
             })}
+          </div>
+
+          <h3 className="xp-subhead">
+            Feather looks <em>saved in the studio</em>
+          </h3>
+          {studioPresets.length === 0 && <div className="xp-note">no looks saved yet — shape a feather in /feather2 and save a preset there</div>}
+          <div className="xp-presets">
+            {studioPresets.map((p) => (
+              <button key={p.id} className={`xp-preset ${studioPreset?.id === p.id ? 'active' : ''}`} onClick={() => pickStudioPreset(p)} title={p.scene.view ? 'look, masks, movement and camera' : 'look, masks and movement'}>
+                <b>{p.name}</b>
+                <span>{p.label}</span>
+              </button>
+            ))}
           </div>
         </section>
       )}
