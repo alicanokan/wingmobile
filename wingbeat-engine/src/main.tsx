@@ -2,6 +2,7 @@ import { StrictMode, Suspense, lazy, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ErrorBoundary } from './sim/ErrorBoundary.tsx';
 
+const Landing = lazy(() => import('./sim/Landing.tsx').then((module) => ({ default: module.Landing })));
 const App = lazy(() => import('./sim/App.tsx'));
 const FeatherView = lazy(() => import('./sim/FeatherView.tsx'));
 const CamSender = lazy(() => import('./sim/CamSender.tsx'));
@@ -81,7 +82,9 @@ function RouteFallback() {
 }
 
 const route = ROUTES[path];
-const label = route?.label ?? 'console';
+const label = route?.label ?? 'Wing Beat';
+const entryMode = new URLSearchParams(location.search).get('mode');
+const hasEntryMode = ['fullscreen', 'control', 'performance', 'mobile'].includes(entryMode ?? '');
 
 createRoot(document.getElementById('root')!).render(
   <ErrorBoundary label={label}>
@@ -90,7 +93,7 @@ createRoot(document.getElementById('root')!).render(
         route.el()
       ) : path === '' || path === '/' ? (
         <StrictMode>
-          <App />
+          {hasEntryMode ? <App /> : <Landing onPick={(mode) => { location.href = `/?mode=${mode}`; }} />}
         </StrictMode>
       ) : (
         <NotFound />

@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "docs:mqtt": "node --experimental-strip-types --no-warnings scripts/gen-mqtt-doc.ts",
-    "check": "npm run typecheck && npm run test && npm run build"
+    "check": "npm run typecheck && npm run test && npm run build",
+    "check:mqtt": "node --experimental-strip-types --no-warnings scripts/gen-mqtt-doc.ts --check"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",

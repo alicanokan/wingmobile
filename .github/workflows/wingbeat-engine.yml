@@ -1,0 +1,30 @@
+name: wingbeat-engine
+
+on:
+  push:
+    paths:
+      - 'wingbeat-engine/**'
+      - 'wingbeat-system/docs/mqtt-topics.md'
+      - '.github/workflows/wingbeat-engine.yml'
+  pull_request:
+    paths:
+      - 'wingbeat-engine/**'
+      - 'wingbeat-system/docs/mqtt-topics.md'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wingbeat-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: wingbeat-engine/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      # the MQTT doc is generated from src/protocol/wire.ts — fail if it drifted
+      - run: npm run check:mqtt

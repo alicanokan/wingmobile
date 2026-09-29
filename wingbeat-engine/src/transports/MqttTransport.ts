@@ -58,6 +58,7 @@ export class MqttTransport extends BaseTransport {
   private hadFloor = new Map<NodeId, boolean>();
   private wasBlackout = false;
   private sequence = 0;
+  private lastLedSent = new Map<NodeId, number>();
   private lastSensorTimestamp = new Map<string, number>();
 
   constructor(opts: MqttOptions) {
@@ -70,13 +71,19 @@ export class MqttTransport extends BaseTransport {
     this.engine = engine;
     this.setStatus('connecting');
 
-    const client = mqtt.connect(this.opts.url, {
+    let client: MqttClient;
+    try {
+      const url = new URL(this.opts.url);
+      if (!['ws:', 'wss:'].includes(url.protocol)) throw new Error('Use a WebSocket broker address.');
+      client = mqtt.connect(this.opts.url, {
       username: this.opts.username,
       password: this.opts.password,
       clientId: 'wingbeat-engine-' + Math.random().toString(16).slice(2, 8),
       reconnectPeriod: 2000,
       clean: true,
+      resubscribe: true,
     });
+    } catch { this.setStatus('error'); return; }
     this.client = client;
 
     client.on('connect', () => {
@@ -139,6 +146,10 @@ export class MqttTransport extends BaseTransport {
       this.sweepTimer = setInterval(() => this.reassert(engine, led, true), HANDBACK_SWEEP_MS);
     }
 
+    if (!led) this.sweepTimer = setInterval(() => {
+      for (const node of engine.getNodes()) if (Date.now() - (this.lastLedSent.get(node.id) ?? 0) >= 2000) this.publishLed(node.id, node.led);
+    }, HANDBACK_SWEEP_MS);
+
     this.detachers.push(
       engine.on('scene', ({ key }) => this.publishScene(key)),
     );
@@ -162,20 +173,21 @@ export class MqttTransport extends BaseTransport {
 
   private publishLed(id: NodeId, cmd: LedCommand) {
     if (!this.client?.connected) return;
+    this.lastLedSent.set(id, Date.now());
     const wire: LedWire = { ...cmd, src: 'engine', seq: ++this.sequence, sentAt: Date.now(), ttlMs: 3500 };
     this.client.publish(topics.cmdLed(id), JSON.stringify(wire), { qos: QOS.cmdEvent, retain: false });
   }
 
   /** Re-send the engine's current LED state for nodes it may drive. With
    *  `onlyRegained` only nodes whose floor flipped false→true since the last
-   *  call are sent, so the sweep is silent in steady state. */
+   *  call are sent, along with a renewal every two seconds before the firmware TTL expires. */
   private reassert(engine: WingbeatEngine, led: LedArbiter, onlyRegained = false) {
     for (const n of engine.getNodes()) {
       const may = led.engineMayDrive(n.id);
       const had = this.hadFloor.get(n.id) ?? true;
       this.hadFloor.set(n.id, may);
       if (!may) continue;
-      if (onlyRegained && had) continue;
+      if (onlyRegained && had && Date.now() - (this.lastLedSent.get(n.id) ?? 0) < 2000) continue;
       this.publishLed(n.id, n.led);
     }
   }
@@ -185,9 +197,11 @@ export class MqttTransport extends BaseTransport {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.staleTimer = this.sweepTimer = null;
     this.hadFloor.clear();
+    this.lastLedSent.clear();
     this.lastSensorTimestamp.clear();
     this.client?.end(true);
     this.client = null;
+    this.engine?.clearInputSource('mqtt');
     super.disconnect();
   }
 
@@ -207,8 +221,16 @@ export class MqttTransport extends BaseTransport {
       return;
     }
     if (t.kind === 'status') {
-      this.engine.ingestStatus(t.id, parseStatus(payload));
+      const status = parseStatus(payload);
+      if (!status.online || !this.engine.getNode(t.id)?.online) {
+        for (const key of this.lastSensorTimestamp.keys()) if (key.startsWith(`${t.id}:`)) this.lastSensorTimestamp.delete(key);
+      }
+      this.engine.ingestStatus(t.id, status);
     } else if (t.kind === 'sensor') {
+      const value = t.sensor === 'presence'
+        ? (typeof payload.present === 'boolean' ? Number(payload.present) : null)
+        : parseSensorValue(t.sensor === 'wind' ? payload.v : payload.mag);
+      if (value === null) return;
       const sourceTimestamp = Number.isFinite(payload.ts) ? Number(payload.ts) : undefined;
       if (sourceTimestamp !== undefined) {
         const key = `${t.id}:${t.sensor}`;
@@ -218,15 +240,9 @@ export class MqttTransport extends BaseTransport {
         if (previous !== undefined && sourceTimestamp <= previous && previous - sourceTimestamp < 10_000) return;
         this.lastSensorTimestamp.set(key, sourceTimestamp);
       }
-      if (t.sensor === 'wind') {
-        const v = parseSensorValue(payload.v);
-        if (v !== null) this.engine.ingestWind(t.id, v, 'mqtt', undefined, sourceTimestamp);
-      } else if (t.sensor === 'motion') {
-        const mag = parseSensorValue(payload.mag);
-        if (mag !== null) this.engine.ingestMotion(t.id, mag, 'mqtt', undefined, sourceTimestamp);
-      } else if (t.sensor === 'presence') {
-        this.engine.ingestPresence(t.id, Boolean(payload.present), 'mqtt', undefined, sourceTimestamp);
-      }
+      if (t.sensor === 'wind') this.engine.ingestWind(t.id, value, 'mqtt', undefined, sourceTimestamp);
+      else if (t.sensor === 'motion') this.engine.ingestMotion(t.id, value, 'mqtt', undefined, sourceTimestamp);
+      else this.engine.ingestPresence(t.id, value === 1, 'mqtt', undefined, sourceTimestamp);
     }
   }
 

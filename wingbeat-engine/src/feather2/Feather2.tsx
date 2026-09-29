@@ -80,6 +80,10 @@ import { InteractionZonesPanel } from './InteractionZonesPanel.tsx';
 import { defaultInteractionZones, initialInteractionZoneState, mixRoutedInteractionZones, stepInteractionZone, type InteractionZone, type InteractionZoneDocument, type InteractionZoneState } from './interactionZones.ts';
 import { defaultAnalysisMasters, groupIdForLayer, restoreAnalysisMasters, seedMasterRoutes } from './zoneMasters.ts';
 import { EncounterModel } from '../engine/encounter.ts';
+import type { WingbeatEngine } from '../engine/WingbeatEngine.ts';
+import type { AudioEngine } from '../engine/AudioEngine.ts';
+import { encounterResponse } from './encounterResponse.ts';
+import { engineLedInputs } from '../led/engineInputs.ts';
 import { playPartMatches, type FeatherPlay } from './play.ts';
 import { deleteFeatherPreset, loadFeatherPresets, newPresetId, onFeatherPresetsChange, upsertFeatherPreset, type FeatherPreset, type FeatherView } from './presets.ts';
 import { PresetsPanel } from './PresetsPanel.tsx';
@@ -641,9 +645,11 @@ export interface Feather2Props {
   play?: FeatherPlay;
   /** A saved studio look to recall (applied whenever its id changes). */
   preset?: FeatherPreset | null;
+  /** The host owns the encounter, audio and physical outputs when embedded. */
+  runtime?: { engine: WingbeatEngine; audio: AudioEngine };
 }
 
-export default function Feather2({ embedded = false, featherId, play, preset }: Feather2Props = {}) {
+export default function Feather2({ embedded = false, featherId, play, preset, runtime }: Feather2Props = {}) {
   const [source, setSource] = useState<Specimen>(() => FEATHERS.find((f) => !f.procedural)!);
   // The render loop reads these through refs, so a host can change them
   // without rebuilding the scene.
@@ -651,6 +657,8 @@ export default function Feather2({ embedded = false, featherId, play, preset }: 
   playRef.current = play;
   const embeddedRef = useRef(embedded);
   embeddedRef.current = embedded;
+  const runtimeRef = useRef(runtime);
+  runtimeRef.current = runtime;
   // Saved looks (see presets.ts). The camera lives inside the scene effect, so
   // it is reached through viewRef; a view that arrives before the scene exists
   // (or while a new feather is being analysed) waits in pendingView.
@@ -762,6 +770,17 @@ export default function Feather2({ embedded = false, featherId, play, preset }: 
   const musicPlayer = useMemo(() => new MusicLoopPlayer(), []);
   useEffect(() => () => musicPlayer.dispose(), [musicPlayer]);
   const encounter = useMemo(() => new EncounterModel(), []);
+  useEffect(() => {
+    if (!runtime) return;
+    let detach: (() => void) | undefined;
+    const attach = () => {
+      const context = runtime.audio.analysisContext;
+      if (context && !detach) detach = feed.useExternal(context, (node) => runtime.audio.connectAnalysis(node), () => runtime.audio.running);
+    };
+    attach();
+    const off = runtime.engine.on('audioReady', attach);
+    return () => { off(); detach?.(); };
+  }, [runtime?.engine, runtime?.audio, feed]);
   const encounterMeter = useRef<((phase: string, state: { energy: number; residue: number; recall: number }) => void) | null>(null);
   useEffect(() => () => feed.dispose(), [feed]);
 
@@ -1270,8 +1289,9 @@ export default function Feather2({ embedded = false, featherId, play, preset }: 
       }
       const dtf = Math.min(0.1, (t - lastT) / 1000) || 1 / 60;
       const responseNow = response.current;
-      const encounterSignal = Math.max(f.level, live.current.breath ? 0.65 : 0);
-      encounter.ingest({
+      const host = runtimeRef.current;
+      const encounterSignal = Math.max(f.level, live.current.breath ? 0.65 : gustTarget);
+      if (!host) encounter.ingest({
         version: 1,
         source: live.current.breath ? 'touch' : feed.micOn ? 'microphone' : 'simulation',
         nodeId: 'feather2',
@@ -1281,7 +1301,8 @@ export default function Feather2({ embedded = false, featherId, play, preset }: 
         valid: true,
         unit: 'normalized',
       });
-      const encounterState = encounter.advanceTo(t).state;
+      const encounterState = host ? host.engine.getExpressiveState() : encounter.advanceTo(t).state;
+      const remembered = encounterResponse(encounterState);
       encounterMeter.current?.(encounterState.phase, encounterState);
       controls.enabled = !live.current.wind && !live.current.breath;
       if (live.current.breath) {
@@ -1396,9 +1417,10 @@ export default function Feather2({ embedded = false, featherId, play, preset }: 
       // All anatomical motion is combined once before the shader. Behaviour
       // fields and the advanced matrix no longer displace the same region
       // through parallel uniform paths.
-      uniforms.uDrvFlex.value = Math.min(DRIVE_MAX, flexNow + behaviourShaft);
-      uniforms.uDrvWave.value = Math.min(DRIVE_MAX, cap(drive.wave) * a.wave + behaviourVane);
-      uniforms.uDrvFringe.value = Math.min(1, cap(drive.fringe) * a.fringe + behaviourFringe);
+      uniforms.uDrvFlex.value = Math.min(DRIVE_MAX, flexNow + behaviourShaft + remembered.shaft);
+      uniforms.uDrvWave.value = Math.min(DRIVE_MAX, cap(drive.wave) * a.wave + behaviourVane + remembered.vane);
+      uniforms.uDrvFringe.value = Math.min(1, cap(drive.fringe) * a.fringe + behaviourFringe + remembered.fringe);
+      uniforms.uDrvShimmer.value = Math.min(DRIVE_MAX, uniforms.uDrvShimmer.value + remembered.shimmer);
       uniforms.uBehaviourTravel.value = behaviourTravel;
       uniforms.uBehaviourTravelPosition.value = behaviourTravelPosition;
       for (const values of [uniforms.uGroupLife.value, uniforms.uPatternLife.value, uniforms.uPartLife.value]) for (const value of values) value.set(0, 0, 0, 0);
@@ -1581,7 +1603,7 @@ export default function Feather2({ embedded = false, featherId, play, preset }: 
       // released the instant the beat lands.
       const ph = f.phase;
       const wind = ph > 0.74 ? -(ph - 0.74) / 0.26 : 0;
-      uniforms.uAntic.value = wind * f.lock * a.flex * responseNow.gain * (routed > 0.001 ? 1 : 0);
+      uniforms.uAntic.value = wind * f.lock * a.flex * responseNow.gain * (routed > 0.001 ? 1 : 0) - remembered.anticipation;
       shedEnv = Math.max(shedEnv * Math.exp(-dtf / 0.42), Math.min(1, cap(drive.fringe) * 0.55));
       uniforms.uShed.value = shedEnv * a.fringe * responseNow.gain;
       uniforms.uLeadNote.value = f.leadNote;
@@ -1600,8 +1622,9 @@ export default function Feather2({ embedded = false, featherId, play, preset }: 
           : k === 'markings' ? Math.min(1, uniforms.uDrvEye.value)
           : Math.min(1, uniforms.uDrvFlex.value * 0.5);
       }
-      // Embedded in /experience the console owns the strips; only the studio pushes.
-      if (!embeddedRef.current && !live.current.demo && !musicPlayer.active) ledService.push({ elements: elemVals, leadNote: f.leadNote, parts: partMean });
+      // Embedded Experience shares its encounter with the lighting router.
+      if (host) ledService.push({ ...engineLedInputs(host.engine), elements: elemVals, leadNote: f.leadNote, parts: partMean });
+      else if (!embeddedRef.current && !live.current.demo && !musicPlayer.active) ledService.push({ elements: elemVals, leadNote: f.leadNote, parts: partMean });
 
       // record this frame, then play back the frame from one beat ago
       const gk = [

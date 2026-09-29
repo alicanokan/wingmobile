@@ -1,295 +1,116 @@
 # Wing Beat — Engine
 
-The shared **brain** of the Wing Beat installation. One transport-agnostic
-engine turns sensor readings (breath / wind, motion, presence) into a layered
-soundscape, LED commands, and a generative feather visual — and it does this
-identically whether the input is a **simulation** in your browser or the
-**real ESP8266 hardware** over MQTT.
+Wing Beat invites a visitor to hold a feather lightly between thumb and index
+finger, notice the weight of the air, and turn a small gesture into movement,
+colour and sound. The artistic direction is for feathers to become vessels for
+music and cultures from different continents. The six bundled scenes currently
+remain internal sound studies; their authorship records do not claim cultural
+provenance.
 
-> Concept: feathers become vessels of culture, carrying the winds of different
-> traditions. Each gust a participant makes is a note; the room's eight wind
-> sensors ring a central interaction zone, four speakers spatialize the sound,
-> and a projected feather bends to the loudest breath. See the project brief.
+## Run and verify
 
-```
-            ┌──────────────┐        ┌──────────────────┐        ┌──────────────────┐
- sensors →  │  TRANSPORT   │  ───►  │  WingbeatEngine  │  ───►  │  CONSUMERS        │
-            │  sim | mqtt  │ ingest │  (the brain)     │  bus   │  audio (Tone.js)  │
-            └──────────────┘        │  state + mapping │ events │  operator map     │
-                  ▲                 │  scenes + spatial│        │  feather projection│
-                  │ led/scene cmds  └──────────────────┘        │  MQTT → LED strips│
-                  └─────────────────────────  bus  ─────────────┘
+```sh
+npm ci
+npm run dev
+npm run check
+npm run check:mqtt
 ```
 
-The engine knows **nothing** about WebSockets, MQTT, Tone.js, React, or LEDs.
-Swap the transport from `SimTransport` to `MqttTransport` and the brain is
-byte-for-byte the same — that is the entire point. **The simulation you tune is
-the installation that ships.**
+Open the printed local address. `check` runs TypeScript, the regression suite
+and a production build. `check:mqtt` compares the adjacent system's MQTT topic
+document with the shared wire contract without changing files. Vercel now uses
+`npm run check` as its build command. The repository workflow also checks MQTT
+documentation; it takes effect when committed and pushed.
 
-## Run the simulation
+## Visitor and operator entry points
 
-```bash
-cd wingbeat-engine
-npm install
-npm run dev        # http://localhost:5173
+| Route | Purpose |
+| --- | --- |
+| `/` | Visitor invitation, Hold / Feel / Listen onboarding, cultural philosophy |
+| `/experience` | Living feather with Play pads, sound, paired phones, MQTT and lighting |
+| `/?mode=control` | Full installation console, source routing, mixer and network settings |
+| `/?mode=performance` | Start / Hold / Settle / Stop performance controls |
+| `/?mode=mobile` | Compact console experience on a phone |
+| `/controller` | Paired phone touch, motion, microphone and camera controller |
+| `/cam` | Same paired controller, with camera guidance; no development relay required |
+| `/feather2` | Feather Studio: photo anatomy, look, response, sound and lighting authoring |
+| `/feather` | Classic display receiving local console broadcasts |
+| `/conductor` | Shared presets, samples and live configuration |
+
+A phone and host use the Device ID and Code shown by Control. Five channels
+can accept multiple phones. Both host surfaces merge participants independently:
+one person releasing does not cancel another. The host chooses Play only,
+Play + FX or Everything. Camera images stay on the phone; motion values travel
+through the paired connection.
+
+## How the engine works
+
+```text
+ESP sensors / phones / keyboard / touch / mic / camera
+                    ↓ normalized readings
+          InputState + WingbeatEngine
+                    ↓
+         EncounterModel: load, gesture, memory, recovery
+                    ↓ shared expressive state
+      living feather + classic projection + sound + lights
 ```
 
-You get one operator console with two **linked** views of the same engine:
+The current room layout has **five sensor channels and one held-feather prop**.
+The core combines sources per node, retains presence per node, expires missing
+input after eight seconds and restores a node on its next valid reading. Wind
+and motion expire independently; a motion packet cannot keep an old wind level
+alive. Source disconnection releases its contribution.
 
-- **left — operator room map:** the layout diagram come alive (projection
-  screen, 4 corner speakers that glow with their live spatial gain, the central
-  INTERACTION zone, the 8 ring wind-sensors, the feather prop). **Press & hold
-  any sensor to blow wind on it.**
-- **right — projection feather:** the audience-facing 3D feather. Aim a
-  projector at this (use the **⛶ fullscreen** button) and it becomes the
-  *screen* in the diagram.
+The encounter is deterministic: thresholds and recent gestures control the
+phases, residue, weaker recall and anticipation. It is not machine learning.
+The living feather now consumes that same state when embedded in Experience,
+and analyzes the host audio mix. In standalone Studio its own encounter also
+contributes to deformation. Root movement stays bounded while the vane and
+fringe carry the larger response.
 
-Controls in the top bar:
+Audio has drone, wind, melody, percussion and accent buses, plus a synchronized
+loop per sensor. Tempo changes playback speed, including pitch. Mixer faders,
+mutes and master level precede output. Audio startup has a bounded wait and
+visible retry feedback if the browser does not grant playback.
 
-| Control | What it does |
-|---|---|
-| **Start audio** | Required once per session (browsers block audio until a click). |
-| **Auto-demo** | Synthetic gusts/presence on every sensor — the piece plays itself. |
-| **Use mic** | Your laptop mic drives the feather's wind value (breathe at the screen). |
-| **Scene chips** | Switch the cultural feather pack (sound palette + LED tint). |
-| **❖ collection** | Open the feather picker — choose the feather the projection shows. |
-| **⚙ mixer** | Open the audio settings + mixer (per-layer volume/mute, voices, samples). |
-| **vol / wind×** | Master gain / wind sensitivity. |
+## Four speakers
 
-### Feather collection
+Connect a compatible audio interface before opening the page. Start audio, then
+choose **Mix → Speaker output → Four speakers** in Experience, or the same
+output selector in console Settings. Order:
 
-The projection can render either the **procedural** feather (built from rachis +
-barbs + vane geometry) or any photograph from your collection. The photos live
-in `public/feathers/`; each is shot on black.
+1. Front left
+2. Front right
+3. Back left
+4. Back right
 
-A chosen photo is turned into a **3D particle cloud** (`buildParticles` in
-`src/sim/Projection.tsx`): the engine samples ~10–15k pixels, drops the black
-background, and places each as a colored particle in 3D by its pixel position.
-- The **rachis** column stays ~80 % stable (central particles have high
-  `aStability`, so effects barely move them) — the still source.
-- Each particle is tagged with its nearest **palette color group**, so a color
-  sensor swirls *that* color through 3D space (XY orbit + Z lift); region
-  sensors (Tip/Tail/…) move their band.
-- **Bloom**: idle → the cloud collapses to the rachis line; taking the feather
-  in hand (feather_01 presence / **F**) blooms it into the full feather form.
+Stereo is the default on every page load. Selecting four speakers requires a
+browser destination exposing at least four channels. If unavailable, stereo
+stays active and the operator sees an explanation. The quad path routes sensor
+loops and the wind/trigger buses with room-position weights and preserves four
+channels through filtering, delay and reverb. It is bus spatialization: voices
+sharing a trigger bus follow that bus's latest position.
 
-#### The 4 interaction phases
+With the development server running, open `/tests/browser/audio-output.html`
+and run the offline render check. It verifies four independent channels without
+playing sound. Physical socket order and speaker levels still require a venue
+test with the chosen interface, OS and browser.
 
-Each interaction escalates the particle cloud through four phases (driven by
-`uBloom / uPattern / uAudioMix / uDisperse` in the point shader):
+## Physical installation
 
-1. **Line → barbs** — any active sensor (or the held feather) blooms the form
-   out of the single rachis line.
-2. **Barbs → visible pattern** — as engagement grows, the active sensor's
-   designated color group / band becomes visible and starts to move.
-3. **→ audio-reactive** — that motion then pumps with the **live audio level**
-   (a `Tone.Meter` tap on the master, read each frame), so the pattern moves to
-   the sound it triggers.
-4. **All 5 active → flight** — when every sensor is active the particles partly
-   separate from the feather and fly across the whole screen as a unique,
-   audio-reactive **data artwork**.
+In Experience, open **Control → Hardware + phones**, set the broker WebSocket
+address and open **Lights** to configure fixtures. The full console retains its
+hardware transport controls. HTTPS pages require a secure `wss://` broker;
+`ws://` is for an appropriate local development setup.
 
-(Audio-reactivity needs **Start audio** running — the meter is silent until then.)
+The MQTT bridge receives sensor/status messages and sends scene, LED and
+accent commands. Lighting arbitration prevents the engine and streaming router
+from fighting over a node. Engine LED state renews every two seconds, before
+the firmware's 3.5-second timeout. Blackout remains authoritative.
 
-#### Motion panel (✦ motion)
-
-A live control surface (`src/sim/MotionPanel.tsx` → `src/sim/motion.ts`) for the
-particle movement — every slider maps to a shader uniform, read each frame:
-
-| Control | Effect |
-|---|---|
-| **Reach** | overall travel distance of the particles |
-| **Max distance** | hard clamp — how far a particle may stray from its source point |
-| **Swirl / Lift** | XY orbit vs Z (depth) amount |
-| **Idle sway** | ambient breathing |
-| **Flight (all-5)** | phase-4 screen-flight distance |
-| **Audio react** | how much the live audio level pumps the motion |
-| **Trigger kick** | impulse added to a sensor's particles **each time its sound fires** |
-| **Rachis lock** | how still the central shaft stays |
-| **Particle size** | point size |
-
-**Trigger reactivity:** every `melody`/`perc`/`accent` event the engine emits
-kicks an impulse into that sensor's channel (decays each frame), so you *see*
-each triggered note/pattern move its color group — the MIDI-/sound-reactive
-movement. Lower **Reach** + **Max distance** to keep particles close to the
-feather (they were straying too far by default).
-
-The selection is engine state (`engine.setFeather(id)` → `'feather'` bus event),
-so it's shared like a scene and could later be driven by hardware or a scene change.
-
-**Add your own feathers:** drop more PNGs (feathers on a black background,
-shot vertically, tip up) into `public/feathers/`, then regenerate the catalog
-`src/sim/feathers.ts` (the array of `{ id, src, label }`) and the small
-thumbnails in `public/feathers/thumbs/` (`sips -Z 150 *.png --out thumbs/`) —
-or just add entries by hand. They appear in the picker automatically.
-
-### Per-sensor mapping + color understanding
-
-The **5** ring sensors (fanned across the top of the interaction zone, matching
-the installation diagram) each drive a **different part or color** of the
-feather (`src/sim/channels.ts`):
-
-| Sensor | Key | Drives |
-|---|---|---|
-| sensor_01 | Q | **Tip** — flutters the top of the vane |
-| sensor_02 | W | **Rachis** — sways/brightens the central shaft |
-| sensor_03 | E | **Color A** — the brightest color group |
-| sensor_04 | R | **Color B** — the next color group |
-| sensor_05 | T | **Tail** — ruffles the downy base |
-
-(The held feather prop, `feather_01`, sits below the ring and drives the overall
-sway — it's the mic target in sim mode.)
-
-**Color understanding:** when a photographic feather is chosen, the engine
-analyses the image (`src/sim/analyzeFeather.ts`, k-means over the non-black
-pixels) and extracts its dominant **color groups** into `engine.featherPalette`.
-The color-channel sensors bind to those groups, so blowing on (or pressing the
-key for) "Color A" makes that feather's *actual* color group ripple and glow —
-"the white parts move", "the gold parts shimmer", etc. The operator map shows
-each sensor's label, its color swatch, and its `[KEY]`.
-
-How it reacts:
-- **region** channels (Tip / Rachis / Tail / Leading) physically displace that
-  zone of the feather (vertex deformation, localized to a UV band/side).
-- **color** channels distort + brighten the pixels matching their color group
-  (photographic feather), or push the procedural barbs toward that color.
-
-**Keyboard:** in Simulation mode, **hold Q W E R T** to blow on sensors 1–5 —
-handy for driving the piece by hand or recording the projection without the
-operator map. (The keys map to the sensors via `KEY_TO_SENSOR`; change the
-sensor count/arrangement in `src/engine/spatial.ts` and the mapping in
-`src/sim/channels.ts` — everything else follows.)
-
-### Audio settings + mixer
-
-The **⚙ mixer** button opens the audio panel (`src/sim/SettingsPanel.tsx`):
-
-- **Mixer** — master + per-layer volume and mute for **Drone, Wind, Melody,
-  Percussion, Accent**. The continuous tone after "Start audio" is the **Drone**
-  pad — mute or lower it here.
-- **Voices** — swap the **Drone** oscillator (sine / triangle / saw / …), the
-  **Wind** noise colour (white / pink / brown), and the reverb amount.
-- **Samples** — load your own audio file to **replace** a layer's trigger sound
-  (Melody / Percussion / Accent); Melody pitches the sample per note. "synth"
-  reverts to the built-in voice.
-
-Each layer runs through its own mixer bus (`src/engine/AudioEngine.ts`), so the
-soundscape is fully re-voiceable live and settings persist before audio starts.
-
-## Connect to the real installation
-
-The hardware system lives in [`../wingbeat-system`](../wingbeat-system) —
-Mosquitto broker + ESP8266 feather/audio nodes. To drive this engine from it:
-
-1. Start the broker (`cd ../wingbeat-system/broker && docker compose up -d`).
-   It exposes MQTT on `:1883` (for ESPs) and MQTT-over-WebSocket on `:9001`
-   (for this browser engine).
-2. Power on the ESP8266 nodes (they already publish to the topic schema this
-   engine speaks — see `../wingbeat-system/docs/mqtt-topics.md`).
-3. In the console top bar, click **Hardware**, set the URL to your broker's
-   WebSocket listener (e.g. `ws://10.0.0.4:9001`), and you're live. Real
-   breath on a real feather now lights the operator map, swells the
-   soundscape, bends the projection, and sends LED commands back to the strips.
-
-No code changes — only the transport switch. The `MqttTransport`:
-
-- **inbound:** `wingbeat/node/<id>/sensor/{wind,motion,presence}` and
-  `.../status` → `engine.ingest*()`
-- **outbound:** engine `led` events → `wingbeat/node/<id>/cmd/led`; engine
-  `scene` events → retained `wingbeat/global/scene`; `accent` on an audio node
-  → `wingbeat/node/<id>/cmd/audio`.
-
-## Layout of the code
-
-```
-src/
-├── engine/                 ← THE BRAIN (no UI, no transport, no I/O)
-│   ├── types.ts            ← domain contract (sensor payloads = MQTT schema)
-│   ├── WingbeatEngine.ts   ← state model + sensor→sound/light mapping + bus
-│   ├── emitter.ts          ← tiny typed event bus
-│   ├── AudioEngine.ts      ← Tone.js layers (bed/wind/melody/perc/accent), a bus consumer
-│   ├── scenes.ts           ← cultural feather packs (add a culture = ~12 lines)
-│   └── spatial.ts          ← the room: 8 sensors, 4 speakers, screen, panning math
-├── transports/             ← the ONLY thing that differs sim vs. hardware
-│   ├── Transport.ts        ← interface + base class
-│   ├── SimTransport.ts     ← synthetic + mic + manual input
-│   └── MqttTransport.ts    ← bridge to the ESP8266 install (wingbeat-system schema)
-└── sim/                    ← the operator console UI (React + R3F)
-    ├── App.tsx             ← wires engine + audio + transport + the two views
-    ├── OperatorMap.tsx     ← top-down room map (SVG)
-    ├── Projection.tsx      ← 3D feather (react-three-fiber)
-    ├── useEngine.ts        ← engine state → React at ~30fps
-    └── mic.ts              ← laptop-mic breath source
-```
-
-### Where to tune things
-
-- **The "feel" of the instrument** (thresholds, cooldowns) →
-  constants at the top of `engine/WingbeatEngine.ts`.
-- **A new culture / scene** → add an entry to `engine/scenes.ts`.
-- **The physical room** (real speaker/sensor positions) → edit the normalized
-  coordinates in `engine/spatial.ts`. Everything spatial — panning, per-speaker
-  gain, the operator map — follows automatically.
-- **The projected visual** → `sim/Projection.tsx`.
-
-## Feather Lab · `/feather2`
-
-The lab opens with a specimen from the collection. Import an image or drop it
-onto the workspace to analyse another feather. Scans run in a cancellable web
-worker; changing specimens or sensitivity keeps the current artwork responsive
-until the latest analysis is ready.
-
-- **Appearance:** natural colour, anatomical regions, pattern zones or measured
-  surface fields; particle material, depth, bloom, lens effects and beat echo.
-- **Reactivity:** Organic, Percussive and Weightless response presets, with
-  sensitivity and frame-rate-independent attack/release controls. The routing
-  matrix still maps musical elements to anatomical movement and lens effects.
-- **Touch wind:** select the wind tool, then hold and drag on the feather.
-  Local gusts follow your hand; loose barbs yield and settle around the shaft.
-- **Analysis:** shape estimate, part proportions, vane profile, left/right
-  balance, measured barb clarity and the extracted palette. These are image
-  measurements, not species identification or model confidence.
-- **Particle amount and groups:** choose the source density from 24k to 240k.
-  The scan keeps six colour clusters and up to twelve detected marking groups.
-  The Layers editor turns anatomy, colours and markings into editable masks.
-  Masks can be moved into collapsible master layers. Both masters and masks
-  can be renamed, hidden or soloed and have independent brightness, particle
-  size, movement, depth and audio matrices; master settings drive every child.
-  **Auto 8** rebuilds semantic masters for vane body, patterns, dominant and
-  accent colours, rachis, calamus, down/fringe and marking anatomy. Matrix
-  response can be muted independently without hiding the visual layer.
-  Master layers also have triggerable Pulse, Flutter, Shimmer, Lift and
-  Blackout presets. Any detected musical element can toggle an effect, hold it
-  as a gate or fire it as a decaying one-shot.
-- **Interaction zones:** the Zones inspector provides a separate master-to-zone
-  gain matrix. Each zone is a reusable trigger object with its own trigger,
-  toggle/gate/one-shot behaviour, steady/sine/strobe motion, speed,
-  attack/release and brightness, particle-size, movement and depth outputs.
-  A triggered zone only affects masters routed to it.
-  True-black plates use a strict edge mask so dark pigment is retained.
-- **Audio:** load a looping track, enable the microphone, or try the explicitly
-  labelled silent 108 BPM demo. The demo does not send signals to the LED rig.
-- **Presentation:** hide the workspace controls; Escape brings them back.
-  Photograph/Particles switches between the original and its reconstruction.
-
-Settings stay on this device. The mobile layout places the collection above
-the artwork and the inspector below it. The operator console links to the lab
-from its Projection controls.
-
-## Build
-
-```bash
-npm run typecheck   # tsc --noEmit
-npm run build       # tsc -b && vite build  → dist/
-npm run preview     # serve the production build
-```
-
-## How this relates to the other two prototypes
-
-This package unifies them. The polished 3D feather from
-`../wing-beat_-ritual-of-remembrance` becomes the **projection**; the MQTT
-topic schema and cultural packs from `../wingbeat-system` become the
-**hardware transport** and **scenes**. The duplicated sensor→sound logic that
-lived inside each prototype's UI now lives once, in `src/engine/`, with no UI
-or transport baked in.
-```
+See [the venue guide](docs/VENUE_KIT.md) and
+[installation readiness](docs/INSTALLATION_READINESS.md) for rehearsal steps.
+A single intended host should own the sound and hardware output. Cloud preset
+sync distributes configuration and samples; it does not stream live sensor
+input between computers. Public PeerJS/TURN availability still affects phones;
+use configured venue services for a dependable show.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseControl, parseHostMsg } from '../link.ts';
+import { controlAllowed, parseControl, parseHostMsg } from '../link.ts';
 import { parseSyncMsg } from '../../sim/sync.ts';
 
 describe('parseControl (phone → console)', () => {
@@ -52,7 +52,28 @@ describe('parseHostMsg (console → phone)', () => {
   });
   it('rejects junk and unknown verbs', () => {
     expect(parseHostMsg({ t: 'reboot' })).toBeNull();
+    // host state: clamped, and an unknown permission level fails OPEN to the
+    // pre-permissions behaviour rather than locking a phone out
+    expect(parseHostMsg({ t: 'state', bpm: 999, master: -2, scene: 'crane_ghana', perms: 'fx' })).toEqual({ t: 'state', bpm: 220, master: 0, scene: 'crane_ghana', perms: 'fx' });
+    expect(parseHostMsg({ t: 'state', bpm: 'fast', scene: '<x>', perms: 'root' })).toEqual({ t: 'state', bpm: 120, master: 0.7, scene: '', perms: 'full' });
     expect(parseHostMsg({ t: 'channels', list: 'x' })).toBeNull();
     expect(parseHostMsg(null)).toBeNull();
+  });
+});
+
+describe('controlAllowed (host-side phone permissions)', () => {
+  it('always lets a phone play, gates fx and the global verbs', () => {
+    for (const p of ['play', 'fx', 'full'] as const) {
+      expect(controlAllowed(p, 'motion')).toBe(true);
+      expect(controlAllowed(p, 'blow')).toBe(true);
+      expect(controlAllowed(p, 'hello')).toBe(true);
+    }
+    expect(controlAllowed('play', 'fx')).toBe(false);
+    expect(controlAllowed('fx', 'fx')).toBe(true);
+    for (const t of ['scene', 'bpm', 'master'] as const) {
+      expect(controlAllowed('play', t)).toBe(false);
+      expect(controlAllowed('fx', t)).toBe(false);
+      expect(controlAllowed('full', t)).toBe(true);
+    }
   });
 });

@@ -1,3 +1,5 @@
+import { ExperienceGuide, ExperiencePanelBar, ExperienceStepHint, type ExperienceStep } from './ExperienceGuide.tsx';
+import { AudioOutputPanel } from './AudioOutputPanel.tsx';
 // ============================================================================
 //  /experience — the distilled front-of-house page.
 //
@@ -6,8 +8,9 @@
 //
 //    · FEATHER  — pick which feather is alive
 //    · PRESETS  — recall the configs saved in /conductor (rig + loops + scene)
-//    · CONTROL  — QR codes so phones join as controllers (dev1..dev5 → parts)
-//    · MIX      — layer mixer with a master fader
+//    · CONTROL  — QR codes so phones join as controllers (dev1..dev5 → parts),
+//                 and what those phones are allowed to change
+//    · MIX      — layer mixer with a master fader, tempo and scene
 //    · PLAY     — the living feather: each trigger channel drives one part of
 //                 the feather with a chosen movement, strength and speed
 //
@@ -24,12 +27,19 @@ import QRCode from 'qrcode';
 import { WingbeatEngine } from '../engine/WingbeatEngine.ts';
 import { AudioEngine } from '../engine/AudioEngine.ts';
 import { SimTransport } from '../transports/SimTransport.ts';
+import { MqttTransport } from '../transports/MqttTransport.ts';
+import type { TransportStatus } from '../transports/Transport.ts';
+import { ledService } from '../led/ledService.ts';
+import { engineLedInputs } from '../led/engineInputs.ts';
+import { LedPanel } from './LedPanel.tsx';
 import { Projection } from './Projection.tsx';
 import { FEATHERS, DEFAULT_FEATHER } from './feathers.ts';
 import { SENSOR_CHANNELS } from './channels.ts';
 import { rig, onRigChange } from './rig.ts';
-import { startHost, type ChannelAd, type Control, type HostHandle, type HostMsg, type LinkStatus } from '../net/link.ts';
-import { loadJson, saveJson } from './persisted.ts';
+import { startHost, controlAllowed, PHONE_PERMS, type ChannelAd, type Control, type HostHandle, type HostMsg, type LinkStatus, type PhonePerms } from '../net/link.ts';
+import { InputArbiter } from '../net/arbiter.ts';
+import { SCENES, SCENE_KEYS } from '../engine/scenes.ts';
+import { loadJson, saveJson, finite, oneOf } from './persisted.ts';
 import { PLAY_EFFECTS, PLAY_PARTS, playChannelsFromClassic, validatePlayChannels, type FeatherPlay, type PlayChannel } from '../feather2/play.ts';
 import { loadFeatherPresets, onFeatherPresetsChange, type FeatherPreset } from '../feather2/presets.ts';
 import { useConductorSync, applyConductorConfig } from '../net/liveSync.ts';
@@ -45,6 +55,15 @@ type Renderer = 'living' | 'classic';
 const RENDERER_KEY = 'wb.xpRenderer.v1';
 const PLAY_KEY = 'wb.xpPlay.v1';
 const PULSE_KEY = 'wb.xpPulse.v1';
+const MASTER_KEY = 'wb.xpMaster.v1';
+const PERMS_KEY = 'wb.xpPerms.v1';
+const GUIDE_KEY = 'wb.xpGuide.dismissed.v1';
+const PERMS_LABEL: Record<PhonePerms, { name: string; hint: string }> = {
+  play: { name: 'Play only', hint: 'phones move the feather, nothing else' },
+  fx: { name: 'Play + FX', hint: 'phones also sweep the FX pad' },
+  full: { name: 'Everything', hint: 'phones also change scene, tempo and master volume' },
+};
+const SHEET_KEYS: Record<string, Exclude<Sheet, null>> = { '1': 'feather', '2': 'control', '3': 'play', '4': 'mix', '5': 'presets' };
 /** Level of a simulated held finger — the phone pad's own hold level. */
 const TEST_HOLD_LEVEL = 0.7;
 
@@ -83,10 +102,33 @@ function loadSavedGroups(): SavedGroup[] {
 export default function Experience() {
   const engine = useMemo(() => new WingbeatEngine(), []);
   const audio = useMemo(() => new AudioEngine(), []);
-  const [feather, setFeather] = useState(DEFAULT_FEATHER);
+  const [feather, setFeather] = useState(FEATHERS.find((f) => !f.procedural)!.id);
   const [audioReady, setAudioReady] = useState(false);
-  const [masterGain, setMasterGain] = useState(0.7);
+  const [audioBusy, setAudioBusy] = useState(false);
+  const [audioError, setAudioError] = useState('');
+  const [masterGain, setMasterGain] = useState(() => loadJson(MASTER_KEY, (raw) => finite(raw, 0.7, 0, 1)));
   const [sheet, setSheet] = useState<Sheet>(null);
+  const [guideOpen, setGuideOpen] = useState(() => !loadJson(GUIDE_KEY, (raw) => raw === true));
+  const [guideEnabled, setGuideEnabled] = useState(guideOpen);
+  const dockRef = useRef<HTMLElement>(null);
+  const guideToggleRef = useRef<HTMLButtonElement>(null);
+  const closePanel = () => {
+    dockRef.current?.querySelector<HTMLButtonElement>('button.on')?.focus();
+    setSheet(null);
+  };
+  const dismissGuide = () => {
+    setGuideOpen(false); setGuideEnabled(false); setSheet(null);
+    saveJson(GUIDE_KEY, true);
+    guideToggleRef.current?.focus();
+  };
+  const openGuideStep = (step: ExperienceStep | null) => {
+    setGuideOpen(false); setSheet(step);
+    setGuideEnabled(step !== null);
+    if (step === null) {
+      saveJson(GUIDE_KEY, true);
+      guideToggleRef.current?.focus();
+    }
+  };
   const rerender = useRigTick(); // mixer + rig rerender
 
   // ---- the living feather ------------------------------------------------
@@ -147,11 +189,28 @@ export default function Experience() {
   };
 
   // ---- engine room (sim transport populates the sensor ring) --------------
-  const [transport] = useState(() => new SimTransport({}));
+  const [inputMode, setInputMode] = useState<'sim' | 'mqtt'>(() => loadJson('wb.xpInput.v1', (raw) => raw === 'mqtt' ? 'mqtt' : 'sim'));
+  const [mqttUrl, setMqttUrl] = useState(() => ledService.config.url);
+  const [brokerUrl, setBrokerUrl] = useState(mqttUrl);
+  const [inputStatus, setInputStatus] = useState<TransportStatus>('idle');
+  const [showLights, setShowLights] = useState(false);
   useEffect(() => {
+    saveJson('wb.xpInput.v1', inputMode);
+    const transport = inputMode === 'mqtt' ? new MqttTransport({ url: brokerUrl, led: ledService }) : new SimTransport({});
+    const off = transport.onStatus(setInputStatus);
     transport.connect(engine);
-    return () => transport.disconnect();
-  }, [transport, engine]);
+    if (inputMode === 'mqtt') ledService.connect(brokerUrl);
+    return () => {
+      off(); transport.disconnect();
+      if (inputMode === 'mqtt') ledService.disconnect();
+    };
+  }, [inputMode, brokerUrl, engine]);
+  useEffect(() => {
+    if (renderer !== 'classic') return;
+    const timer = setInterval(() => ledService.push(engineLedInputs(engine)), 40);
+    return () => clearInterval(timer);
+  }, [engine, renderer]);
+  useEffect(() => { engine.setFeather(feather); }, [engine, feather]);
 
   // Wire audio onto the engine bus. Without this the AudioEngine has no engine
   // reference, so init() never starts the drone bed and never emits audioReady
@@ -162,6 +221,7 @@ export default function Experience() {
     return () => {
       detach();
       off();
+      audio.dispose();
     };
   }, [audio, engine]);
 
@@ -180,7 +240,21 @@ export default function Experience() {
 
   useEffect(() => {
     audio.setMasterGain(masterGain);
+    saveJson(MASTER_KEY, masterGain);
   }, [audio, masterGain]);
+
+  // ---- scene + tempo: the same two stores the phones write ----------------
+  const [scene, setSceneState] = useState(engine.scene);
+  useEffect(() => engine.on('scene', (e: { key: string }) => setSceneState(e.key)), [engine]);
+  const bpm = rig.global.bpm;
+  const chooseBpm = (v: number) => {
+    if (!Number.isFinite(v)) return;
+    const next = Math.max(40, Math.min(220, Math.round(v)));
+    if (next === rig.global.bpm) return;
+    rig.global.bpm = next; // the ONE tempo store; audio follows it
+    audio.setBpm(next);
+    rerender();
+  };
 
   // No drone here. The bed is a continuous pad that starts with the audio
   // engine and never stops — right for the console, wrong for a page whose
@@ -201,8 +275,40 @@ export default function Experience() {
 
   // ---- phone controllers: one host per slot, slot i drives part i ---------
   const linksRef = useRef<HostHandle[]>([]);
+  /** merged level per slot, written by the pump from the arbiter — meters read it */
   const motion = useRef<number[]>(Array(DEVICE_COUNT).fill(0));
-  const stale = useRef<Array<ReturnType<typeof setTimeout> | undefined>>(Array(DEVICE_COUNT).fill(undefined));
+  // Several phones can be on one part (a room takes many, groups overlap the
+  // part rooms): the arbiter keeps each hand apart and merges loudest-wins.
+  const arb = useMemo(() => new InputArbiter(DEVICE_COUNT), []);
+  const fxApplied = useRef({ x: 0, y: 0, on: false });
+  const applyFx = (f: { x: number; y: number; on: boolean }) => {
+    const a = fxApplied.current;
+    if (a.on === f.on && a.x === f.x && a.y === f.y) return;
+    fxApplied.current = f;
+    audio.setFx(f.x, f.y, f.on);
+  };
+  // Key / puff air per part (see the keyboard section below).
+  const keyAir = useRef<number[]>(new Array(SLOT_PART.length).fill(0));
+  const puff = (i: number, amount: number) => {
+    const sens = rig.sensors[SLOT_PART[i]]?.sensitivity ?? 1;
+    keyAir.current[i] = Math.min(1, keyAir.current[i] + amount * Math.min(1.5, sens));
+  };
+  // What phones may change. Visitors' phones on a show night should not reach
+  // the master fader; the operator's own phone should.
+  const [perms, setPerms] = useState<PhonePerms>(() => loadJson(PERMS_KEY, (raw) => oneOf(raw, PHONE_PERMS, 'full')));
+  const permsRef = useRef(perms);
+  permsRef.current = perms;
+  const masterRef = useRef(masterGain);
+  masterRef.current = masterGain;
+  useEffect(() => {
+    saveJson(PERMS_KEY, perms);
+    // a pad held when FX was locked must not leave the filter parked
+    if (perms === 'play') {
+      arb.clearFx();
+      applyFx({ x: 0, y: 0, on: false });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perms]);
   const [deviceInfo, setDeviceInfo] = useState<Array<{ deviceId: string; code: string } | null>>(Array(DEVICE_COUNT).fill(null));
   const [devicePeers, setDevicePeers] = useState<number[]>(Array(DEVICE_COUNT).fill(0));
   const [deviceStatus, setDeviceStatus] = useState<LinkStatus[]>(Array(DEVICE_COUNT).fill('idle'));
@@ -214,40 +320,48 @@ export default function Experience() {
   const groupUid = useRef(0);
   const adsRef = useRef<ChannelAd[]>([]);
 
-  // One motion frame in → one or many parts driven. Devices pass [i]; groups
-  // pass their whole slot list.
-  const feedMotion = (i: number, v: number) => {
-    motion.current[i] = Math.max(0, Math.min(1, v));
-    if (stale.current[i]) clearTimeout(stale.current[i]);
-    stale.current[i] = setTimeout(() => {
-      motion.current[i] = 0;
-    }, 1500);
-  };
-  const handleControl = (c: Control, slots: number[]) => {
+  // One control frame in → one or many parts driven. Devices pass [i]; groups
+  // pass their whole slot list; `from` is the sending phone, so hands stay apart.
+  const handleControl = (c: Control, slots: number[], from: string) => {
+    if (!controlAllowed(permsRef.current, c.t)) return;
     switch (c.t) {
       case 'motion':
+        arb.feed(from, slots, c.v, performance.now());
+        break;
       case 'blow':
-        for (const i of slots) feedMotion(i, c.v);
+        // a one-shot puff, not a level: pump air in and let the part's Release
+        // leak it out (as a level it used to hang for the 1.5 s stale window)
+        for (const i of slots) puff(i, c.v * 0.8);
         break;
       case 'scene':
         engine.setScene(c.key);
         break;
-      case 'bpm': {
-        const v = Number(c.v);
-        if (!Number.isFinite(v)) break;
-        const bpm = Math.max(40, Math.min(220, Math.round(v)));
-        rig.global.bpm = bpm; // the ONE tempo store; audio follows it
-        audio.setBpm(bpm);
+      case 'bpm':
+        chooseBpm(Number(c.v));
         break;
-      }
       case 'master':
         setMasterGain(Math.max(0, Math.min(1, c.v)));
         break;
       case 'fx':
-        audio.setFx(c.x, c.y, c.on);
+        applyFx(arb.feedFx(from, c.x, c.y, c.on, performance.now()));
         break;
     }
   };
+
+  // What a phone is told when it joins, and whenever any of it changes: the
+  // channel directory plus the host's real scene / tempo / master / permissions.
+  const stateMsg = (): HostMsg => ({ t: 'state', bpm: rig.global.bpm, master: masterRef.current, scene: engine.scene, perms: permsRef.current });
+  const greet = (): HostMsg[] => [{ t: 'channels', list: adsRef.current }, stateMsg()];
+  const broadcast = (m: HostMsg) => {
+    linksRef.current.forEach((h) => h.broadcast(m));
+    groupHostsRef.current.forEach((h) => h.broadcast(m));
+  };
+  // Debounced: a dragged fader changes 60×/s, phones need the value it lands on.
+  useEffect(() => {
+    const id = setTimeout(() => broadcast(stateMsg()), 150);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bpm, masterGain, scene, perms]);
 
   const persistGroups = () =>
     saveJson(GROUPS_KEY, [...groupDefsRef.current.values()].map((g) => ({ deviceId: g.deviceId, code: g.code, slots: g.slots })));
@@ -265,8 +379,9 @@ export default function Experience() {
         setGroups((gs) => gs.map((g) => (g.uid === uid ? { ...g, deviceId: d, code: c } : g)));
       },
       onPeers: (n) => setGroups((gs) => gs.map((g) => (g.uid === uid ? { ...g, peers: n } : g))),
-      onControl: (c) => handleControl(c, slots),
-      hello: () => ({ t: 'channels', list: adsRef.current }),
+      onControl: (c, from) => handleControl(c, slots, from),
+      onDrop: (from) => arb.drop(from),
+      hello: greet,
     });
     groupHostsRef.current.set(uid, h);
     persistGroups();
@@ -294,8 +409,9 @@ export default function Experience() {
         onStatus: (s) => setAt(setDeviceStatus, i, s),
         onIdentity: (deviceId, code) => setAt<{ deviceId: string; code: string } | null>(setDeviceInfo, i, { deviceId, code }),
         onPeers: (n) => setAt(setDevicePeers, i, n),
-        onControl: (c) => handleControl(c, [i]),
-        hello: () => ({ t: 'channels', list: adsRef.current }),
+        onControl: (c, from) => handleControl(c, [i], from),
+        onDrop: (from) => arb.drop(from),
+        hello: greet,
       }),
     );
     setDeviceInfo(linksRef.current.map((h) => ({ deviceId: h.deviceId, code: h.code })));
@@ -305,7 +421,7 @@ export default function Experience() {
   }, []);
   useEffect(
     () => () => {
-      stale.current.forEach((t) => t && clearTimeout(t));
+      arb.clear();
       linksRef.current.forEach((h) => h.destroy());
       linksRef.current = [];
       groupHostsRef.current.forEach((h) => h.destroy());
@@ -326,36 +442,38 @@ export default function Experience() {
       list.push({ d: g.deviceId, c: g.code, label: g.slots.map((i) => SENSOR_CHANNELS[i]?.label ?? `P${i + 1}`).join(' + '), peers: g.peers, kind: 'group' });
     }
     adsRef.current = list;
-    const msg: HostMsg = { t: 'channels', list };
-    linksRef.current.forEach((h) => h.broadcast(msg));
-    groupHostsRef.current.forEach((h) => h.broadcast(msg));
+    broadcast({ t: 'channels', list });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceInfo, devicePeers, groups]);
 
   // ---- keyboard: each key press puffs air into its part ------------------
   //
   // Same balloon behaviour as the conductor's Pulse: a press pumps air IN and
   // presses STACK, then the air leaks back out at that part's Release. Keys are
-  // per-channel (q w e r t), so the page is playable without a phone.
-  const keyAir = useRef<number[]>(new Array(SLOT_PART.length).fill(0));
+  // per-channel (q w e r t), so the page is playable without a phone. 1–5 open
+  // the sheets and Esc closes them, so the page runs without a mouse too.
 
   // Console-debuggable, same as the operator page.
   useEffect(() => {
-    (window as unknown as { xp?: object }).xp = { audio, engine, transport, rig, motion, keyAir, play };
-  }, [audio, engine, transport, play]);
+    (window as unknown as { xp?: object }).xp = { audio, engine, rig, motion, keyAir, play, arb };
+  }, [audio, engine, play, arb]);
   useEffect(() => {
     const onDown = (ev: KeyboardEvent) => {
       if (ev.repeat || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      if (ev.key === 'Escape') { setGuideOpen(false); return closePanel(); }
       // don't fire while someone is working a fader or a number box
       const tag = (ev.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      const sheetKey = SHEET_KEYS[ev.key];
+      if (sheetKey) { setGuideOpen(false); return setSheet((cur) => (cur === sheetKey ? null : sheetKey)); }
       const i = SENSOR_CHANNELS.findIndex((c) => c.key === ev.key.toLowerCase());
       if (i < 0) return;
       ev.preventDefault();
-      const sens = rig.sensors[SLOT_PART[i]]?.sensitivity ?? 1;
-      keyAir.current[i] = Math.min(1, keyAir.current[i] + 0.4 * Math.min(1.5, sens));
+      puff(i, 0.4);
     };
     window.addEventListener('keydown', onDown);
     return () => window.removeEventListener('keydown', onDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // The input pump: each slot's motion → its fixed part, shaped by rig
@@ -367,6 +485,7 @@ export default function Experience() {
   useEffect(() => {
     let last = performance.now();
     const driven = new Set<string>();
+    const present = new Set<string>();
     const loop = () => {
       const t = performance.now();
       const dt = Math.min(0.25, (t - last) / 1000);
@@ -374,6 +493,8 @@ export default function Experience() {
       // frames of the classic per-frame envelope (rate per 60 Hz frame) that
       // fit in this tick, so both renderers feel the same at any tick rate
       const frames = dt * 60;
+      // a pad whose phone vanished mid-hold goes stale here; the bus follows
+      if (fxApplied.current.on) applyFx(arb.fxState(t));
       for (let i = 0; i < SLOT_PART.length; i++) {
         const id = SLOT_PART[i];
         const sens = rig.sensors[id]?.sensitivity ?? 1;
@@ -382,25 +503,33 @@ export default function Experience() {
         if (keyAir.current[i] > 0) {
           keyAir.current[i] = Math.max(0, keyAir.current[i] - dt * (0.2 + rel * 5));
         }
-        // phone motion and key air both drive the part — loudest wins
         // phone motion, key air and the test switch all drive the part — loudest wins
-        const v = Math.min(1, Math.max((motion.current[i] ?? 0) * sens, keyAir.current[i], testHold.current[i] ? TEST_HOLD_LEVEL * sens : 0));
-        // The living feather gets the same ATTACK/RELEASE envelope the classic
-        // particles apply (readChannelEnergies in Projection): a held finger
-        // sustains, a release lets go at the sensor's own rate.
-        const s = rig.sensors[id];
-        const env = s?.modules.release;
-        const rate = v > play.levels[i] ? (env ? s.attack : rig.global.attack) : env ? s.release : rig.global.release;
-        play.levels[i] += (v - play.levels[i]) * (1 - Math.pow(1 - Math.min(1, rate), frames));
+        const hands = (motion.current[i] = arb.level(i, t));
+        const v = Math.min(1, Math.max(hands * sens, keyAir.current[i], testHold.current[i] ? TEST_HOLD_LEVEL * sens : 0));
+        // Presence goes to the engine on the EDGE only: every call runs a full
+        // ingest + encounter publish, and the held wind (re-emitted by the
+        // transport at 20 Hz) already keeps the node fresh.
+        const here = v > 0.05;
+        if (here !== present.has(id)) {
+          engine.ingestPresence(id, here, 'touch');
+          if (here) present.add(id);
+          else present.delete(id);
+        }
         if (v > 0.001) {
-          transport.holdWind(id, v);
-          transport.setPresence(id, v > 0.05);
+          engine.ingestWind(id, v, 'touch');
           driven.add(id);
         } else if (driven.has(id)) {
-          transport.releaseWind(id);
-          transport.setPresence(id, false);
+          engine.ingestWind(id, 0, 'touch');
           driven.delete(id);
         }
+        // Read the merged engine input: a real sensor and a phone can play
+        // the same part, and either release leaves the other source intact.
+        const node = engine.getNode(id);
+        const level = node?.online ? Math.min(1, Math.max(node.wind, node.motion, node.present ? 0.7 : 0)) : 0;
+        const s = rig.sensors[id];
+        const env = s?.modules.release;
+        const rate = level > play.levels[i] ? (env ? s.attack : rig.global.attack) : env ? s.release : rig.global.release;
+        play.levels[i] += (level - play.levels[i]) * (1 - Math.pow(1 - Math.min(1, rate), frames));
       }
     };
     const timer = setInterval(loop, 33);
@@ -408,12 +537,10 @@ export default function Experience() {
       clearInterval(timer);
       play.levels.fill(0);
       testHold.current.fill(false);
-      driven.forEach((id) => {
-        transport.releaseWind(id);
-        transport.setPresence(id, false);
-      });
+      engine.clearInputSource('touch');
     };
-  }, [transport, play]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, play, arb]);
 
   // ---- presets from /conductor -------------------------------------------
   const [presets, setPresets] = useState<CloudPreset[]>([]);
@@ -446,9 +573,16 @@ export default function Experience() {
   };
 
   const startAudio = async () => {
-    await audio.init(masterGain);
-    await audio.resume();
-    setAudioReady(true);
+    if (audioBusy) return;
+    setAudioBusy(true);
+    setAudioError('');
+    try {
+      audio.setMasterGain(masterGain);
+      await audio.start();
+      setAudioReady(true);
+    } catch (err) {
+      setAudioError(err instanceof Error ? err.message : 'Sound could not start. Tap Begin to try again.');
+    } finally { setAudioBusy(false); }
   };
 
   // Loops arrive asynchronously (conductor download → decode → install), so
@@ -465,13 +599,15 @@ export default function Experience() {
   const featherLabel = FEATHERS.find((f) => f.id === feather)?.label ?? feather;
   const joined = devicePeers.reduce((a, b) => a + (b > 0 ? 1 : 0), 0) + groups.reduce((a, g) => a + (g.peers > 0 ? 1 : 0), 0);
 
-  const toggle = (s: Exclude<Sheet, null>) => setSheet((cur) => (cur === s ? null : s));
+  const toggle = (s: Exclude<Sheet, null>) => { setGuideOpen(false); setSheet((cur) => (cur === s ? null : s)); };
+  const panelBar = <ExperiencePanelBar label={sheet ? sheet[0].toUpperCase() + sheet.slice(1) : ''} onClose={closePanel} onSkip={guideEnabled ? dismissGuide : undefined} />;
+  const stepHint = <ExperienceStepHint sheet={sheet} showDirections={guideEnabled} onNext={openGuideStep} audioReady={audioReady} audioBusy={audioBusy} onStartAudio={() => void startAudio()} />;
 
   return (
     <div className="xp">
       {renderer === 'living' ? (
         <Suspense fallback={null}>
-          <Feather2 embedded featherId={feather} play={play} preset={studioPreset} />
+          <Feather2 embedded featherId={feather} play={play} preset={studioPreset} runtime={{ engine, audio }} />
         </Suspense>
       ) : (
         <Projection engine={engine} audio={audio} featherId={feather} paused={false} />
@@ -483,23 +619,29 @@ export default function Experience() {
           Wing Beat
           <small>experience</small>
         </h1>
-        <a className="xp-back" href="/" title="back to the console">
-          ✕
-        </a>
+        <div className="xp-mark-actions">
+          <button ref={guideToggleRef} className="xp-guide-toggle" aria-expanded={guideOpen} aria-controls="xp-getting-started" onClick={() => { setSheet(null); setGuideEnabled(true); setGuideOpen((open) => !open); }}>How to play</button>
+          <a className="xp-back" href="/" title="back to the landing page" aria-label="Back to landing page">✕</a>
+        </div>
       </header>
 
+      {guideOpen && sheet === null && <ExperienceGuide onPick={openGuideStep} onDismiss={dismissGuide} />}
+
       {/* start audio — the one browser-mandated gesture, made a moment */}
-      {!audioReady && (
-        <button className="xp-start" onClick={() => void startAudio()}>
+      {!audioReady && !sheet && (
+        <button className="xp-start" onClick={() => void startAudio()} disabled={audioBusy}>
           <span className="xp-start-ring" />
-          Begin
-          <small>tap for sound</small>
+          {audioBusy ? 'Starting…' : 'Begin'}
+          <small>{audioBusy ? 'opening sound' : 'tap for sound'}</small>
         </button>
       )}
+      {audioError && <div className="xp-audio-error" role="alert">{audioError}</div>}
 
       {/* sheets */}
       {sheet === 'feather' && (
         <section className="xp-sheet" data-accent="feather">
+          {panelBar}
+          {stepHint}
           <h2>
             Feather <em>{featherLabel}</em>
           </h2>
@@ -526,6 +668,7 @@ export default function Experience() {
 
       {sheet === 'presets' && (
         <section className="xp-sheet" data-accent="presets">
+          {panelBar}
           <h2>
             Presets <em>from the conductor</em>
             <button className="xp-mini" onClick={loadPresets} title="refresh list">
@@ -563,9 +706,22 @@ export default function Experience() {
 
       {sheet === 'control' && (
         <section className="xp-sheet" data-accent="control">
+          {panelBar}
+          {stepHint}
           <h2>
             Control <em>scan to join · or press the key</em>
           </h2>
+          <div className="xp-installation">
+            <div className="xp-groupchips" role="radiogroup" aria-label="Installation input">
+              <button role="radio" aria-checked={inputMode === 'sim'} className={`xp-chip ${inputMode === 'sim' ? 'active' : ''}`} onClick={() => setInputMode('sim')}>Phones + keys</button>
+              <button role="radio" aria-checked={inputMode === 'mqtt'} className={`xp-chip ${inputMode === 'mqtt' ? 'active' : ''}`} onClick={() => { setBrokerUrl(mqttUrl); setInputMode('mqtt'); }}>Hardware + phones</button>
+              <span role="status">Input {inputStatus}</span>
+            </div>
+            <label>Broker address <input aria-label="Broker address" value={mqttUrl} onChange={(e) => setMqttUrl(e.target.value)} placeholder="wss://your-broker" /></label>
+            <button className="xp-chip" onClick={() => setBrokerUrl(mqttUrl)}>Apply address</button>
+            <button className="xp-chip" aria-expanded={showLights} aria-controls="xp-lights" onClick={() => setShowLights((v) => !v)}>{showLights ? 'Hide lights ×' : 'Lights'}</button>
+            {showLights && <div id="xp-lights"><LedPanel /></div>}
+          </div>
           <div className="xp-devices">
             {deviceInfo.map((info, i) => (
               <DeviceQr
@@ -579,6 +735,17 @@ export default function Experience() {
                 indices={[i]}
               />
             ))}
+          </div>
+
+          <div className="xp-groupbar">
+            <div className="xp-note">Phones may — {PERMS_LABEL[perms].hint}.</div>
+            <div className="xp-groupchips" role="radiogroup" aria-label="What phones may change">
+              {PHONE_PERMS.map((p) => (
+                <button key={p} role="radio" aria-checked={perms === p} className={`xp-chip ${perms === p ? 'active' : ''}`} onClick={() => setPerms(p)}>
+                  {PERMS_LABEL[p].name}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="xp-groupbar">
@@ -637,10 +804,13 @@ export default function Experience() {
 
       {sheet === 'mix' && (
         <section className="xp-sheet" data-accent="mix">
+          {panelBar}
+          {stepHint}
           <h2>
             Mix <em>sample playback levels</em>
           </h2>
 
+          <AudioOutputPanel audio={audio} />
           <div className="xp-master">
             <span className="xp-fader-name">Master</span>
             <input
@@ -663,6 +833,24 @@ export default function Experience() {
               Generative pulse
               <i>{pulse ? 'bell · pluck · drum on gestures' : 'off — loops only'}</i>
             </span>
+          </div>
+
+          <div className="xp-mixrow">
+            <span className="xp-mute-spacer" />
+            <span className="xp-fader-name">
+              Tempo
+              <i>loops follow it</i>
+            </span>
+            <input className="xp-fader" type="range" min={40} max={220} step={1} value={bpm} onChange={(e) => chooseBpm(Number(e.target.value))} />
+            <span className="xp-fader-val">{bpm}</span>
+          </div>
+
+          <div className="xp-scenes" role="radiogroup" aria-label="Scene">
+            {SCENE_KEYS.map((k) => (
+              <button key={k} role="radio" aria-checked={scene === k} className={`xp-chip ${scene === k ? 'active' : ''}`} title="LED tint, and the scale the generative pulse plays" onClick={() => engine.setScene(k)}>
+                {SCENES[k].label}
+              </button>
+            ))}
           </div>
 
           {!audioReady && <div className="xp-note">press Begin — the loops load with the audio engine</div>}
@@ -716,6 +904,8 @@ export default function Experience() {
         const part = PLAY_PARTS.find((p) => p.id === ch.part) ?? PLAY_PARTS[0];
         return (
           <section className="xp-sheet" data-accent="play" data-test-tick={testTick}>
+            {panelBar}
+            {stepHint}
             <h2>
               Play <em>a trigger moves one part</em>
             </h2>
@@ -785,22 +975,22 @@ export default function Experience() {
       })()}
 
       {/* dock */}
-      <nav className="xp-dock">
+      <nav ref={dockRef} className="xp-dock" aria-label="Experience controls">
         <button className={sheet === 'feather' ? 'on' : ''} data-accent="feather" onClick={() => toggle('feather')}>
-          Feather
+          <span className="xp-dock-step" aria-hidden="true">1</span>Feather
+        </button>
+        <button className={sheet === 'control' ? 'on' : ''} data-accent="control" onClick={() => toggle('control')}>
+          <span className="xp-dock-step" aria-hidden="true">2</span>Control
+          {joined > 0 && <i className="xp-dock-badge">{joined}</i>}
+        </button>
+        <button className={sheet === 'play' ? 'on' : ''} data-accent="play" onClick={() => toggle('play')}>
+          <span className="xp-dock-step" aria-hidden="true">3</span>Play
+        </button>
+        <button className={sheet === 'mix' ? 'on' : ''} data-accent="mix" onClick={() => toggle('mix')}>
+          <span className="xp-dock-step" aria-hidden="true">4</span>Mix
         </button>
         <button className={sheet === 'presets' ? 'on' : ''} data-accent="presets" onClick={() => toggle('presets')}>
           Presets
-        </button>
-        <button className={sheet === 'control' ? 'on' : ''} data-accent="control" onClick={() => toggle('control')}>
-          Control
-          {joined > 0 && <i className="xp-dock-badge">{joined}</i>}
-        </button>
-        <button className={sheet === 'mix' ? 'on' : ''} data-accent="mix" onClick={() => toggle('mix')}>
-          Mix
-        </button>
-        <button className={sheet === 'play' ? 'on' : ''} data-accent="play" onClick={() => toggle('play')}>
-          Play
         </button>
       </nav>
     </div>
@@ -867,7 +1057,7 @@ function DeviceQr({
           <div className="xp-dev-meter">
             <div className="xp-dev-fill" style={{ height: `${Math.round(lvl * 100)}%` }} />
           </div>
-          <span>live</span>
+          <span>{peers > 1 ? `${peers} phones` : 'live'}</span>
         </div>
       ) : qr ? (
         <img className="xp-dev-qr" src={qr} alt={`join ${label}`} />
@@ -875,6 +1065,8 @@ function DeviceQr({
         <div className="xp-dev-wait">{status === 'error' ? 'error' : '…'}</div>
       )}
       {info && !connected && <div className="xp-dev-code">{info.code}</div>}
+      {info && <a className="xp-chip" href={url.replace('/controller?', '/cam?')} target="_blank" rel="noreferrer">Camera</a>}
+      {(status === 'error' || status === 'connecting') && <div role="status" className="xp-note">{status === 'error' ? 'Connection interrupted — retrying' : 'Connecting…'}</div>}
     </div>
   );
 }

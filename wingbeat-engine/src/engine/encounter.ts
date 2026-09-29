@@ -36,7 +36,7 @@ export class EncounterModel {
   private lastStepAt: number | null = null;
   private accumulator = 0;
   private lastInputAt = -Infinity;
-  private presence = false;
+  private presence = new Set<NodeId>();
   private forceSettle = false;
   private held = false;
   private phase: EncounterPhase = 'rest';
@@ -54,8 +54,10 @@ export class EncounterModel {
     if (!sample.valid || !Number.isFinite(sample.value) || !Number.isFinite(sample.timestamp)) return [];
     const value = Math.max(0, Math.min(sample.kind === 'motion' ? 1.5 : 1, sample.value));
     if (sample.kind === 'presence') {
-      this.presence = value >= 0.5;
-      if (this.presence) this.lastInputAt = sample.timestamp;
+      if (value >= 0.5) {
+        this.presence.add(sample.nodeId);
+        this.lastInputAt = sample.timestamp;
+      } else this.presence.delete(sample.nodeId);
       return [];
     }
 
@@ -112,9 +114,19 @@ export class EncounterModel {
     this.levels.clear();
   }
 
+  /** Lost input is not a newly completed visitor gesture. Let its load decay. */
+  releaseNode(id: NodeId): void {
+    this.presence.delete(id);
+    for (const kind of ['wind', 'motion']) {
+      const channel = `${id}:${kind}`;
+      this.active.delete(channel);
+      this.levels.delete(channel);
+    }
+  }
+
   emergencyStop(): void {
     this.requestSettle();
-    this.presence = false;
+    this.presence.clear();
     this.energy = 0;
     this.residue = 0;
     this.vane = 0;
@@ -214,7 +226,7 @@ export class EncounterModel {
     if (this.active.size || this.energy > 0.12) return recent.length >= 2 ? 'awakening' : 'breath';
     if (timestamp - this.lastInputAt < 1400 && this.fringe > 0.03) return 'settling';
     if ((this.residue > 0.06 && recent.length) || this.recall > 0.01) return 'rememberedEncounter';
-    if (this.presence) return 'presence';
+    if (this.presence.size) return 'presence';
     return 'rest';
   }
 

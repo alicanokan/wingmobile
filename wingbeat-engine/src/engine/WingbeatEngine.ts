@@ -17,6 +17,7 @@
 
 import { Emitter } from './emitter.ts';
 import { EncounterModel } from './encounter.ts';
+import { InputState, INPUT_STALE_MS } from './inputState.ts';
 import { GestureTraceRecorder, replayGestureTrace } from './replay.ts';
 import { DEFAULT_SCENE, SCENES, getScene } from './scenes.ts';
 import { nodeGain, panForNode, nodeSpec } from './spatial.ts';
@@ -41,7 +42,7 @@ const WIND_MELODY_COOLDOWN_MS = 800;
 const MOTION_PERC_THRESHOLD = 0.6;
 const MOTION_PERC_COOLDOWN_MS = 250;
 const PRESENCE_ACCENT_COOLDOWN_MS = 1500;
-const NODE_STALE_MS = 8000;
+const NODE_STALE_MS = INPUT_STALE_MS;
 
 const PERC_PITCHES = ['C2', 'D2', 'E2', 'G2', 'A2'];
 
@@ -74,6 +75,7 @@ export class WingbeatEngine {
   private readonly clock: () => number;
   private readonly random: () => number;
   private readonly encounter = new EncounterModel();
+  private readonly inputs = new InputState();
   private expressiveState: ExpressiveState;
   private recorder: GestureTraceRecorder | null = null;
   scene: string;
@@ -150,15 +152,20 @@ export class WingbeatEngine {
   // ---- Ingest: the only way data enters the engine -----------------------
 
   ingestSample(sample: CalibratedInputSample): void {
+    if (!sample.valid || !Number.isFinite(sample.value) || !Number.isFinite(sample.timestamp)) return;
     this.recorder?.record(sample);
     this.bus.emit({ type: 'input', sample });
-    for (const gesture of this.encounter.ingest(sample)) {
+    const levels = this.inputs.ingest(sample);
+    const value = sample.kind === 'presence' ? Number(levels.present) : levels[sample.kind];
+    const calibrated = sample.kind === 'wind' ? clamp(value * this.windSensitivity, 0, 1) : value;
+    const n = this.ensure(sample.nodeId);
+    n.online = true;
+    for (const gesture of this.encounter.ingest({ ...sample, value: calibrated })) {
       this.bus.emit({ type: 'gesture', gesture });
     }
-    if (!sample.valid) return;
-    if (sample.kind === 'wind') this.ingestWindValue(sample.nodeId, sample.value, sample.timestamp);
-    else if (sample.kind === 'motion') this.ingestMotionValue(sample.nodeId, sample.value, sample.timestamp);
-    else this.ingestPresenceValue(sample.nodeId, sample.value >= 0.5, sample.timestamp);
+    if (sample.kind === 'wind') this.ingestWindValue(sample.nodeId, value, sample.timestamp);
+    else if (sample.kind === 'motion') this.ingestMotionValue(sample.nodeId, value, sample.timestamp);
+    else this.ingestPresenceValue(sample.nodeId, value >= 0.5, sample.timestamp);
     this.publishEncounter(sample.timestamp);
   }
 
@@ -198,7 +205,12 @@ export class WingbeatEngine {
     n.rssi = p.rssi;
     n.fw = p.fw;
     n.lastSeen = this.clock();
+    if (!p.online) this.releaseNode(n);
     this.publishNode(n);
+    if (!p.online) {
+      this.publishWind();
+      this.publishEncounter(this.clock());
+    }
   }
 
   ingestWind(id: NodeId, v: number, source: InputSource = 'simulation', timestamp = this.clock(), sourceTimestamp?: number) {
@@ -212,16 +224,7 @@ export class WingbeatEngine {
 
     // The wind layer is a global swell: the loudest breath in the room wins,
     // and it's spatialized toward whoever is making it.
-    let maxWind = 0;
-    let loudest: NodeRuntime | null = null;
-    for (const node of this.nodes.values()) {
-      if (node.wind > maxWind) {
-        maxWind = node.wind;
-        loudest = node;
-      }
-    }
-    const perSpeakerGain = nodeGain(loudest ? loudest.id : id);
-    this.bus.emit({ type: 'wind', maxWind, perSpeakerGain });
+    this.publishWind();
 
     // Melody triggers on a wind crest (threshold + per-node cooldown).
     const t = timestamp;
@@ -364,8 +367,52 @@ export class WingbeatEngine {
   }
 
   tick(timestamp = this.clock()): void {
-    this.publishEncounter(timestamp);
     this.tickStaleness(timestamp);
+    this.publishEncounter(timestamp);
+  }
+
+  private publishWind(): void {
+    let maxWind = 0;
+    let loudest = '';
+    for (const node of this.nodes.values()) {
+      if (node.online && node.wind > maxWind) {
+        maxWind = node.wind;
+        loudest = node.id;
+      }
+    }
+    this.bus.emit({ type: 'wind', maxWind, perSpeakerGain: nodeGain(loudest) });
+  }
+
+  private releaseNode(n: NodeRuntime): void {
+    this.inputs.dropNode(n.id);
+    this.encounter.releaseNode(n.id);
+    n.wind = n.motion = 0;
+    n.present = false;
+    n.ledSettleAt = 0;
+    this.setLed(n.id, { mode: 'off', r: 0, g: 0, b: 0, intensity: 0 });
+  }
+
+  /** Transport changes release only their own contribution. */
+  clearInputSource(source: InputSource): void {
+    const now = this.clock();
+    for (const id of this.inputs.dropSource(source)) this.refreshInputs(id, now);
+    this.publishWind();
+    this.publishEncounter(now);
+  }
+
+  private refreshInputs(id: NodeId, now: number): void {
+    const n = this.nodes.get(id);
+    if (!n) return;
+    const levels = this.inputs.levels(id);
+    n.wind = clamp(levels.wind * this.windSensitivity, 0, 1);
+    n.motion = levels.motion;
+    n.present = levels.present;
+    this.encounter.releaseNode(id);
+    for (const kind of ['wind', 'motion', 'presence'] as const) {
+      const value = kind === 'presence' ? Number(n.present) : n[kind];
+      if (value) this.encounter.ingest(this.sample(id, kind, value, 'simulation', now));
+    }
+    this.publishNode(n);
   }
 
   private publishEncounter(timestamp: number): void {
@@ -379,16 +426,22 @@ export class WingbeatEngine {
 
   // ---- Housekeeping: mark silent nodes offline ---------------------------
   tickStaleness(t = this.clock()) {
+    const expired = this.inputs.expire(t);
+    for (const id of expired) this.refreshInputs(id, t);
+    let changed = expired.length > 0;
     for (const n of this.nodes.values()) {
+      const stale = t - n.lastSeen > NODE_STALE_MS;
+      if (stale && n.online) {
+        n.online = false;
+        this.releaseNode(n);
+        this.publishNode(n);
+        changed = true;
+      }
       if (n.ledSettleAt && t >= n.ledSettleAt) {
         n.ledSettleAt = 0;
         this.setLed(n.id, { mode: 'shimmer', ...getScene(this.scene).led, intensity: 0.4 });
       }
-      const stale = t - n.lastSeen > NODE_STALE_MS;
-      if (stale && n.online) {
-        n.online = false;
-        this.publishNode(n);
-      }
     }
+    if (changed) this.publishWind();
   }
 }

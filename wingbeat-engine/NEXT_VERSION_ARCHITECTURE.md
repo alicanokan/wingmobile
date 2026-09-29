@@ -109,4 +109,4 @@ Existing culturally named presets are retained only as stable internal keys for 
 
 ## Remaining physical-installation gate
 
-Browser contracts now carry output sequence, send time and TTL, and reject stale input timestamps. Firmware must enforce the same TTL locally so disconnected strips and audio nodes return to a safe state without depending on the browser or broker.
+Browser contracts carry output sequence, send time and TTL, and reject stale input timestamps. The adjacent feather-node and audio-node firmware sources already enforce sequence ordering and local command expiry. Verify that these versions are flashed on the actual devices, and rehearse disconnect/reconnect and safe fallback. Engine LED commands now renew every two seconds, before the 3.5-second lease expires. Source-level support does not establish physical installation readiness.

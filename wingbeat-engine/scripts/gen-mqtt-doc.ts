@@ -1,7 +1,7 @@
 // Render src/protocol/wire.ts into wingbeat-system/docs/mqtt-topics.md.
 //   npm run docs:mqtt
 // Run with Node ≥ 22.6 (type stripping) — no build step, no extra deps.
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WIRE_DOC, PROTOCOL_VERSION, LED_MODES, GLOBAL_ACTIONS } from '../src/protocol/wire.ts';
@@ -77,5 +77,12 @@ is sent as \`off\` by whoever holds it.
 \`\`\`
 `;
 
-writeFileSync(out, md);
-console.log(`wrote ${out} (${WIRE_DOC.length} topics)`);
+if (process.argv.includes('--check')) {
+  if (readFileSync(out, 'utf8') !== md) {
+    console.error('MQTT documentation differs from the wire contract. Run npm run docs:mqtt.');
+    process.exitCode = 1;
+  } else console.log('MQTT documentation matches the wire contract.');
+} else {
+  writeFileSync(out, md);
+  console.log(`wrote ${out} (${WIRE_DOC.length} topics)`);
+}

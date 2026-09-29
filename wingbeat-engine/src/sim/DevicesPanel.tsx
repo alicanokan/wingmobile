@@ -9,7 +9,7 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { useTheme, qrColors } from './theme.ts';
-import type { LinkStatus } from '../net/link.ts';
+import type { LinkStatus, PhonePerms } from '../net/link.ts';
 import type { SourceKind } from './inputs.ts';
 import { Knob } from './Knob.tsx';
 
@@ -19,6 +19,8 @@ interface DeviceInfo {
 }
 
 interface Props {
+  phonePerms?: PhonePerms;
+  onPhonePerms?: (value: PhonePerms) => void;
   devices: Array<DeviceInfo | null>;
   statuses: LinkStatus[];
   peers: number[];
@@ -95,6 +97,7 @@ function DeviceCard({ index, info, status, peers, level, threshold, onThresholdC
 
       {show && qr && <img className="wb-dev-qr" src={qr} alt={`pair device ${index + 1}`} />}
       {show && url && <div className="wb-phone-url">{url}</div>}
+      {show && url && <a className="wb-btn" href={url.replace('/controller?', '/cam?')} target="_blank" rel="noreferrer">Camera controller</a>}
     </div>
   );
 }
@@ -123,7 +126,7 @@ export function DeviceHud({ peers, levels, onOpen }: { peers: number[]; levels: 
   );
 }
 
-export function DevicesPanel({ devices, statuses, peers, levels, log, onClose, thresholds, onThresholdChange }: Props) {
+export function DevicesPanel({ devices, statuses, peers, levels, log, onClose, thresholds, onThresholdChange, phonePerms, onPhonePerms }: Props) {
   const n = devices.length;
   const onLocalhost = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
   return (
@@ -136,9 +139,15 @@ export function DevicesPanel({ devices, statuses, peers, levels, log, onClose, t
       </div>
 
       <div className="wb-settings-note">
-        Pair up to {n} phones — each gets its own <b>Device ID + Code</b> and its own source <b>D1–D{n}</b>. Watch each one's live level below, then route
+        Pair phones into {n} channels — several phones can share each <b>Device ID + Code</b> and source <b>D1–D{n}</b>. Watch each one's live level below, then route
         <b> D1–D{n}</b> onto sensors in the Routing matrix. <b>Thresh</b> ignores jitter below that level (a phone lying still).
       </div>
+
+      {onPhonePerms && <label className="wb-set-row">Phones may change
+        <select aria-label="Phone permissions" value={phonePerms} onChange={(e) => onPhonePerms(e.target.value as PhonePerms)}>
+          <option value="play">Play only</option><option value="fx">Play + FX</option><option value="full">Everything</option>
+        </select>
+      </label>}
 
       {onLocalhost && (
         <div className="wb-settings-note warn">

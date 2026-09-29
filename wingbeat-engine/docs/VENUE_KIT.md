@@ -1,9 +1,8 @@
 # Wingbeat — Venue Kit
 
-What to run on the console laptop so the show does not depend on anyone
-else's servers. Every item here has a free-cloud fallback that the app uses
-automatically when the item is absent — the kit replaces single points of
-failure, it does not add new ones.
+How to configure venue services and rehearse the installation. Defaults use
+public phone signalling and TURN; MQTT needs a configured broker. Selecting a
+venue endpoint does not automatically fail over to the public service.
 
 | Need | Free default (works, but not yours) | Venue kit (yours) |
 |---|---|---|
@@ -21,9 +20,12 @@ brew install mosquitto            # or apt install mosquitto
 mosquitto -c wingbeat-system/broker/mosquitto.conf -v
 ```
 
-- Console (`/`, hardware mode) → MQTT URL `ws://<laptop-ip>:9001`.
+- Experience (`/experience` → Control → Hardware + phones), or console (`/?mode=control`, hardware mode) → MQTT URL `ws://<laptop-ip>:9001`.
 - Lights (`/conductor` → Light Engine, or `/feather2` with Auto-connect) → same URL.
 - ESP firmware `config.h` → `MQTT_HOST` = the laptop's LAN IP, port 1883.
+
+For a page served over HTTPS, the broker must expose `wss://` with a valid
+certificate. Plain `ws://` is suitable for a local HTTP development setup.
 
 Give the laptop a **static LAN IP** (or a DHCP reservation) so the nodes'
 `config.h` never goes stale between rehearsals.
@@ -69,7 +71,7 @@ and point the phones' QR links at `http://<laptop-ip>:5199/controller`.
 
 ## 3 · TURN (only if phones are not on the venue LAN)
 
-On the same wifi as the console, phones connect directly; STUN is enough.
+On a LAN that permits device-to-device traffic, phones can often connect directly. Guest Wi-Fi and client isolation can still require TURN.
 TURN matters when phones are on cellular or an AP-isolated guest network.
 The public relay is rate-limited and shared with the world.
 
@@ -115,3 +117,21 @@ VITE_TURN_CRED=<secret>
    the Device ID/Code on screen changed).
 6. Light Engine connected; **Identify** each strip once; fixtures patched.
 7. Walk the room with internet **off** for two minutes. Nothing should stop.
+
+## 7 · September 2026 checks
+
+- Landing → Begin here → Hold / Feel / Listen → I’m ready opens Experience.
+- Start audio, hold a Play pad, release it, and hear/see the response settle.
+- Test each physical input, unplug it mid-gesture, wait beyond eight seconds,
+  then reconnect. Its stuck input should clear and fresh samples restore it.
+- Pair two phones to the same channel. Release one while the other holds.
+- Put a phone to sleep, restore it, and verify reconnect plus fresh input.
+- For camera mode, use the channel’s Camera link and tap Use camera. Test on
+  the real HTTPS phone browser; only motion readings are transmitted.
+- For quad sound, choose Four speakers after connecting the audio interface.
+  Verify sockets 1/2/3/4 are front-left/front-right/back-left/back-right and
+  calibrate room levels. Stereo remains the default after a reload.
+- Hold an engine-owned light state for more than 3.5 seconds. It must remain
+  renewed; test router takeover, hand-back and blackout.
+- Run `npm run check` and `npm run check:mqtt` before deployment. Rehearse again
+  against the deployed build; local verification does not update wingbeat.art.

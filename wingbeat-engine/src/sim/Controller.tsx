@@ -18,7 +18,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import './ui.css';
 import { SCENES, SCENE_KEYS } from '../engine/scenes.ts';
 import { CameraSource } from './camera.ts';
-import { connectHost, type ChannelAd, type ClientHandle, type Control, type LinkStatus } from '../net/link.ts';
+import { connectHost, type ChannelAd, type ClientHandle, type Control, type HostMsg, type LinkStatus, type PhonePerms } from '../net/link.ts';
 
 const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 
@@ -31,7 +31,7 @@ interface Chan {
   status: LinkStatus;
 }
 
-export default function Controller() {
+export default function Controller({ cameraMode = false }: { cameraMode?: boolean } = {}) {
   const params = new URLSearchParams(location.search);
   const [deviceId, setDeviceId] = useState((params.get('d') ?? '').toUpperCase());
   const [code, setCode] = useState((params.get('c') ?? '').toUpperCase());
@@ -51,6 +51,28 @@ export default function Controller() {
   const [addD, setAddD] = useState('');
   const [addC, setAddC] = useState('');
 
+  // ---- the host's real values ------------------------------------------------
+  // The host announces its scene / tempo / master / what this phone may change.
+  // Without it the sliders sat at their own defaults and the first touch made
+  // the installation jump to them. A host that never announces (the console,
+  // an older build) leaves everything enabled, as before.
+  const [bpm, setBpm] = useState(120);
+  const [master, setMaster] = useState(0.7);
+  const [scene, setScene] = useState('');
+  const [perms, setPerms] = useState<PhonePerms>('full');
+  /** when this phone last moved a control itself — the host's echo of our own
+   *  drag must not fight the finger that is still on the slider */
+  const touched = useRef({ bpm: 0, master: 0, scene: 0 });
+  const onHostMsg = useCallback((m: HostMsg) => {
+    if (m.t === 'channels') return setAvailable(m.list);
+    const now = performance.now();
+    const settled = (at: number) => now - at > 700;
+    if (settled(touched.current.bpm)) setBpm(m.bpm);
+    if (settled(touched.current.master)) setMaster(m.master);
+    if (settled(touched.current.scene) && m.scene) setScene(m.scene);
+    setPerms(m.perms);
+  }, []);
+
   const addChannel = useCallback(
     (d: string, c: string, label?: string) => {
       const D = d.trim().toUpperCase();
@@ -67,13 +89,13 @@ export default function Controller() {
           setChans((cs) => cs.map((x) => (x.key === key ? { ...x, status: st } : x)));
           addLog(`[${D}] status: ${st}`);
         },
-        onMsg: (m) => setAvailable(m.list),
+        onMsg: onHostMsg,
         onLog: (msg) => addLog(`[${D}] ${msg}`),
       });
       handlesRef.current.set(key, h);
       setChans((cs) => [...cs, { key, d: D, c: C, label: label ?? D, status: 'connecting' }]);
     },
-    [addLog],
+    [addLog, onHostMsg],
   );
 
   const removeChannel = useCallback((key: number) => {
@@ -162,11 +184,31 @@ export default function Controller() {
   const HOLD_LEVEL = 0.7;
   const padState = useRef({ active: false, x: 0, y: 0, t: 0, speed: 0, fx: { x: 0, y: 0 } });
   const padTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [padLevel, setPadLevel] = useState(0);
-  const [fxPos, setFxPos] = useState<{ x: number; y: number } | null>(null);
+  // The level bar, the pad glow and the FX dot are written straight to the DOM:
+  // they change 15–30×/s, and routing that through state re-rendered the whole
+  // controller (every slider, every scene button) on each tick.
+  const padRef = useRef<HTMLDivElement | null>(null);
+  const levelRef = useRef<HTMLDivElement | null>(null);
+  const dotRef = useRef<HTMLSpanElement | null>(null);
+  const showLevel = (v: number) => {
+    padRef.current?.style.setProperty('--lvl', String(v));
+    if (levelRef.current) levelRef.current.style.width = `${Math.round(v * 100)}%`;
+  };
+  const showFx = (fx: { x: number; y: number } | null) => {
+    const dot = dotRef.current;
+    if (!dot) return;
+    dot.style.display = fx ? '' : 'none';
+    if (fx) {
+      dot.style.left = `${((fx.x + 1) / 2) * 100}%`;
+      dot.style.top = `${((1 - fx.y) / 2) * 100}%`;
+    }
+  };
+  const permsRef = useRef(perms);
+  permsRef.current = perms;
+  const fxAllowed = () => permsRef.current !== 'play';
 
   const emitMotion = (v: number) => {
-    setPadLevel(v);
+    showLevel(v);
     send({ t: 'motion', v });
   };
 
@@ -184,7 +226,8 @@ export default function Controller() {
     // swipe energy leaks away (~0.25 s), the hold floor stays
     s.speed *= Math.exp(-0.066 / 0.25);
     emitMotion(clamp01(Math.max(HOLD_LEVEL, s.speed)));
-    setFxPos({ ...s.fx });
+    if (!fxAllowed()) return;
+    showFx(s.fx);
     sendPrimary({ t: 'fx', x: s.fx.x, y: s.fx.y, on: true });
   };
 
@@ -213,8 +256,8 @@ export default function Controller() {
     if (padTimer.current) clearInterval(padTimer.current);
     padTimer.current = null;
     emitMotion(0);
-    setFxPos(null);
-    sendPrimary({ t: 'fx', x: 0, y: 0, on: false });
+    showFx(null);
+    if (fxAllowed()) sendPrimary({ t: 'fx', x: 0, y: 0, on: false });
   };
 
   // never leave a stuck note if the page unmounts mid-hold
@@ -269,7 +312,7 @@ export default function Controller() {
           camRaf.current = requestAnimationFrame(loop);
           const r = cam.read();
           if ((frame & 1) === 0) send({ t: 'motion', v: r.motion }); // ~30fps to console
-          if ((frame & 7) === 0) setPadLevel(r.motion); // cheaper visual update
+          if ((frame & 3) === 0) showLevel(r.motion);
           frame++;
         };
         camRaf.current = requestAnimationFrame(loop);
@@ -288,6 +331,10 @@ export default function Controller() {
   }, []);
 
   // --- Accelerometer (optional): shake magnitude → motion. --------------------
+  const disableTilt = () => {
+    setTilt(false);
+    emitMotion(0); // the last shake must not hang on the host
+  };
   const enableTilt = async () => {
     stopCamera(); // camera and accelerometer both drive motion — pick one
     type DM = typeof DeviceMotionEvent & { requestPermission?: () => Promise<string> };
@@ -315,16 +362,15 @@ export default function Controller() {
       const now = performance.now();
       if (now - last < 40) return;
       last = now;
+      // a finger on the pad owns the level — the two used to interleave, so a
+      // held note flickered between the hold level and the (lower) shake
+      if (padState.current.active) return;
       emitMotion(v);
     };
     window.addEventListener('devicemotion', onMotion);
     return () => window.removeEventListener('devicemotion', onMotion);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tilt]);
-
-  const [bpm, setBpm] = useState(120);
-  const [master, setMaster] = useState(0.7);
-  const [scene, setScene] = useState('');
 
   const copyLog = () => {
     const text = `Wing Beat controller log\nUA: ${navigator.userAgent}\nurl: ${location.href}\n\n${log.join('\n')}`;
@@ -347,10 +393,10 @@ export default function Controller() {
     return (
       <div className="wb-cam-sender">
         <div className="wb-cam-title">
-          Wing Beat <small>controller</small>
+          Wing Beat <small>{cameraMode ? 'camera controller' : 'controller'}</small>
         </div>
         <div className="wb-settings-note" style={{ maxWidth: 420, margin: '0 auto 12px' }}>
-          Enter the <b>Device ID</b> and <b>Code</b> shown on the console — or scan its QR.
+          Enter the <b>Device ID</b> and <b>Code</b> shown on the console — or scan its QR. {cameraMode && <>After connecting, tap <b>Use camera</b>. Only motion readings leave your phone.</>}
         </div>
         <div className="wb-ctl-form">
           <label className="wb-label">Device ID</label>
@@ -375,7 +421,7 @@ export default function Controller() {
     <div className="wb-ctl">
       <div className="wb-ctl-head">
         <span className="wb-cam-title" style={{ margin: 0 }}>
-          Wing Beat <small>controller</small>
+          Wing Beat <small>{cameraMode ? 'camera controller' : 'controller'}</small>
         </span>
         <span className="wb-cam-status" style={{ margin: 0 }}>
           <span className="wb-dot connected" /> {chans.length > 1 ? `${liveCount}/${chans.length} channels` : 'connected'}
@@ -385,6 +431,7 @@ export default function Controller() {
         </button>
       </div>
 
+      {cameraMode && <p className="wb-settings-note">Tap Use camera to send movement. Your video stays on this phone.</p>}
       {showAdd && (
         <div className="wb-ctl-section wb-ctl-addbox">
           <div className="wb-label">Add a channel</div>
@@ -448,27 +495,22 @@ export default function Controller() {
       )}
 
       <div
+        ref={padRef}
         className="wb-ctl-pad"
-        style={{ ['--lvl' as string]: padLevel }}
         onPointerDown={camOn ? undefined : onPadDown}
         onPointerMove={camOn ? undefined : onPadMove}
         onPointerUp={camOn ? undefined : onPadUp}
         onPointerCancel={camOn ? undefined : onPadUp}
       >
         <canvas ref={camCanvasRef} className="wb-ctl-cam" style={{ display: camOn ? 'block' : 'none' }} />
-        {!camOn && (
+        {!camOn && perms !== 'play' && (
           <>
             <span className="wb-ctl-fx-corner tl">delay</span>
             <span className="wb-ctl-fx-corner tr">reverb</span>
             <span className="wb-ctl-fx-corner bl">high-pass</span>
             <span className="wb-ctl-fx-corner br">low-pass</span>
             <span className="wb-ctl-fx-cross" />
-            {fxPos && (
-              <span
-                className="wb-ctl-fx-dot"
-                style={{ left: `${((fxPos.x + 1) / 2) * 100}%`, top: `${((1 - fxPos.y) / 2) * 100}%` }}
-              />
-            )}
+            <span ref={dotRef} className="wb-ctl-fx-dot" style={{ display: 'none' }} />
           </>
         )}
         <span className="wb-ctl-pad-label">
@@ -476,12 +518,10 @@ export default function Controller() {
             ? 'camera — wave in front of the phone'
             : tilt
               ? 'shake the phone'
-              : chans.length > 1
-                ? 'hold to play (all channels) · corners = fx · swipe = extra'
-                : 'hold to play · corners = fx · swipe = extra'}
+              : `hold to play${chans.length > 1 ? ' (all channels)' : ''}${perms !== 'play' ? ' · corners = fx' : ''} · swipe = extra`}
         </span>
         <div className="wb-level" style={{ maxWidth: 260 }}>
-          <div className="wb-level-fill" style={{ width: `${Math.round(padLevel * 100)}%`, background: 'linear-gradient(90deg,#7c3aed,#c4a8ff)' }} />
+          <div ref={levelRef} className="wb-level-fill" style={{ width: '0%', background: 'linear-gradient(90deg,#7c3aed,#c4a8ff)' }} />
         </div>
       </div>
 
@@ -492,7 +532,7 @@ export default function Controller() {
       )}
 
       <div className="wb-ctl-row">
-        <button className={`wb-btn ${tilt ? 'active' : ''}`} onClick={enableTilt} disabled={tilt}>
+        <button className={`wb-btn ${tilt ? 'active' : ''}`} onClick={tilt ? disableTilt : enableTilt}>
           {tilt ? '✓ motion sensor' : 'Motion sensor'}
         </button>
         <button className={`wb-btn ${camOn ? 'active' : ''}`} onClick={camOn ? stopCamera : startCamera}>
@@ -518,6 +558,8 @@ export default function Controller() {
         </div>
       )}
 
+      {perms === 'full' && (
+      <>
       <div className="wb-ctl-section">
         <div className="wb-label">Scene</div>
         <div className="wb-ctl-scenes">
@@ -526,8 +568,9 @@ export default function Controller() {
               key={k}
               className={`wb-btn ${scene === k ? 'active' : ''}`}
               onClick={() => {
+                touched.current.scene = performance.now();
                 setScene(k);
-                send({ t: 'scene', key: k });
+                sendPrimary({ t: 'scene', key: k });
               }}
             >
               {SCENES[k].label}
@@ -549,8 +592,9 @@ export default function Controller() {
           value={bpm}
           onChange={(e) => {
             const v = Number(e.target.value);
+            touched.current.bpm = performance.now();
             setBpm(v);
-            send({ t: 'bpm', v });
+            sendPrimary({ t: 'bpm', v });
           }}
         />
       </div>
@@ -568,11 +612,14 @@ export default function Controller() {
           value={Math.round(master * 100)}
           onChange={(e) => {
             const v = Number(e.target.value) / 100;
+            touched.current.master = performance.now();
             setMaster(v);
-            send({ t: 'master', v });
+            sendPrimary({ t: 'master', v });
           }}
         />
       </div>
+      </>
+      )}
 
       {logPanel}
     </div>

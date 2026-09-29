@@ -268,10 +268,13 @@ export class AudioFeed {
   private fileUrl = '';
   private fileName = '';
   private disposed = false;
+  private ownsContext = true;
+  private externalActive: (() => boolean) | null = null;
+  private detachExternal: (() => void) | null = null;
 
   private ensureCtx(): AudioContext {
-    if (!this.ctx) {
-      this.ctx = new AudioContext();
+    if (!this.ctx) this.ctx = new AudioContext();
+    if (!this.analyser) {
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = FFT;
       // low smoothing: onsets need the transient intact
@@ -308,6 +311,26 @@ export class AudioFeed {
   private tap(node: AudioNode): void {
     node.connect(this.analyser!);
     node.connect(this.upmix!);
+  }
+
+  /** Analyse the host's actual mix without creating another audible graph. */
+  useExternal(context: AudioContext, connect: (node: AudioNode) => () => void, active: () => boolean): () => void {
+    this.detachExternal?.();
+    if (this.ctx && this.ctx !== context) throw new Error('Audio analyser already belongs to another context');
+    this.ctx = context;
+    this.ownsContext = false;
+    this.ensureCtx();
+    const offSpectrum = connect(this.analyser!);
+    const offStereo = connect(this.upmix!);
+    this.externalActive = active;
+    this.sourceLabel = 'installation mix';
+    const detach = () => {
+      offSpectrum(); offStereo();
+      this.externalActive = null;
+      this.detachExternal = null;
+    };
+    this.detachExternal = detach;
+    return detach;
   }
 
   /** Play a music file out loud and analyse it. */
@@ -368,17 +391,19 @@ export class AudioFeed {
     return !!this.micStream;
   }
   get active(): boolean {
-    return this.filePlaying || this.micOn;
+    return this.externalActive ? this.externalActive() : this.filePlaying || this.micOn;
   }
 
   dispose(): void {
     this.disposed = true;
+    this.detachExternal?.();
     this.stopMic();
     this.el?.pause();
     this.el = null;
     if (this.fileUrl) URL.revokeObjectURL(this.fileUrl);
     this.fileUrl = '';
-    this.ctx?.close().catch(() => {});
+    for (const node of [this.analyser, this.upmix, this.splitter, this.anL, this.anR]) node?.disconnect();
+    if (this.ownsContext) this.ctx?.close().catch(() => {});
     this.ctx = null;
   }
 

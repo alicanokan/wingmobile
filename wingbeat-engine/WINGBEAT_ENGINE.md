@@ -7,7 +7,7 @@
 >
 > Legend: `📄 path` = source file · ⚠️ = Claude is unsure, please confirm.
 >
-> _Last generated: 2026-07-18 from commit `6a5f069`._
+> _Original inventory: 2026-07-18. Input, audio and Experience corrections: 2026-09-29. See README.md and docs/INSTALLATION_READINESS.md for the current operating guide._
 
 ---
 
@@ -17,7 +17,7 @@ Wingbeat is an interactive installation where a **feather** — rendered as a li
 particle system on a projection — reacts to people in the room. Breath, motion,
 phones, and real ESP hardware feed *sensors*; each sensor drives a *part* or
 *colour layer* of the feather (it moves, separates, glows) and plays its own
-*loop sample*, all tuned to a cultural "scene" (Phoenix/Anatolia, Crane/Ghana…).
+*loop sample*, all tuned to a sound-and-colour scene. Bundled scenes are internal studies; the artistic direction is a feather carrying music and culture between continents.
 
 The system is built in **three decoupled layers** so the same "brain" runs a
 laptop simulation or the real forest install unchanged:
@@ -40,8 +40,8 @@ laptop simulation or the real forest install unchanged:
 |---|---|---|
 | **Mic** (`MicSource`) | Laptop microphone → smoothed 0..1 level. "Breathe at the screen." Sim stand-in for the ESP electret breath sensor. | `src/sim/mic.ts` |
 | **Laptop camera** (`CameraSource`) | Webcam motion-theremin: frame-diff → motion energy (volume) + horizontal centre (position). | `src/sim/camera.ts` |
-| **Phone camera (QR)** (`CamSender`) | `/cam` — **parked (decision 2026-08-16: leave as is).** Its relay is a Vite dev-server plugin that never existed on the deploy and nothing consumes its messages; it has never worked in this repo. The working phone path is `/controller`. | `src/sim/CamSender.tsx`, `src/sim/camNet.ts` |
-| **Phone controller (QR)** (`Controller`) | Phone opens `/controller`, pairs over WebRTC, sends a motion pad / accelerometer + scene / tempo / volume. Up to 5 phones (D1–D5). Rooms persist across console reloads; phones re-dial with backoff; every frame is validated (`parseControl`). One phone can drive **several channels at once** (＋ button lists the console's free channels; per-channel strips), and `/experience` can mint **group codes** — one room fanning a phone's signal to several parts (`wb.xpGroups.v1`). | `src/sim/Controller.tsx`, `src/net/link.ts` |
+| **Phone camera (QR)** (`CamSender`) | `/cam` opens the paired controller with camera guidance. It sends motion through the same WebRTC room as touch and microphone; no development relay. | `src/sim/CamSender.tsx`, `src/sim/Controller.tsx` |
+| **Phone controller (QR)** (`Controller`) | Phone opens `/controller`, pairs over WebRTC, sends a motion pad / accelerometer + scene / tempo / volume. Five channels (D1–D5), each accepting several phones. Rooms persist across console reloads; phones re-dial with backoff; every frame is validated (`parseControl`). One phone can drive **several channels at once** (＋ button lists the console's free channels; per-channel strips), and `/experience` can mint **group codes** — one room fanning a phone's signal to several parts (`wb.xpGroups.v1`). | `src/sim/Controller.tsx`, `src/net/link.ts` |
 | **Keyboard** | Keys `q w e r t` fire the 5 sensor slots as enveloped pulses (amount + release). | `src/sim/KeyboardPanel.tsx`, `src/sim/inputs.ts` |
 | **Manual (operator map)** | Click/press-and-hold a sensor diamond on the room map to "blow" on it. | `src/sim/OperatorMap.tsx`, `SimTransport` |
 | **Auto-demo** | Synthetic gusts/presence on every ring sensor so the piece animates itself. | `src/transports/SimTransport.ts` |
@@ -76,7 +76,7 @@ feather parts. 📄 `src/sim/inputs.ts`, `src/sim/InputMatrix.tsx`, `src/sim/cha
 - **`WingbeatEngine`** — state model + thresholds + cooldowns + scene; emits a typed event bus. 📄 `src/engine/WingbeatEngine.ts`
 - **Event bus** (`Emitter`) — tiny typed emitter. 📄 `src/engine/emitter.ts`
 - **Event types** — `node`, `wind`, `melody`, `perc`, `accent`, `scene`, `feather`, `led`, `audioReady`. 📄 `src/engine/types.ts`
-- **Spatial model** — room layout: screen, 4 corner speakers, 8-sensor ring, feather prop; drives panning + per-speaker gain + the operator map. 📄 `src/engine/spatial.ts`
+- **Spatial model** — room layout: screen, 4 corner speakers, 5-sensor arc, feather prop; drives panning + per-speaker gain + the operator map. 📄 `src/engine/spatial.ts`
 - **Domain types** — the transport ↔ engine ↔ consumer contract (matches the MQTT schema). 📄 `src/engine/types.ts`
 - **Engine snapshot poller** — polls engine → React state at ~30fps. 📄 `src/sim/useEngine.ts`
 
@@ -220,3 +220,16 @@ typecheck + tests + build + doc-drift on every push.
    right label? ______
 2. **Anything missing entirely** (modules you have in your head but not in
    code)? ______
+
+## September 2026 runtime corrections
+
+- Missing sensors release input after eight seconds and recover on fresh samples.
+- Presence is aggregated per node; input sources keep separate contributions.
+- Experience can host MQTT and lighting, with the living feather consuming its shared encounter and audio.
+- Stereo remains the default; an optional discrete four-speaker output uses a compatible interface.
+- Both console and Experience merge simultaneous phone input and enforce host permissions.
+- Phone signalling and data handshakes recover with bounded attempts per timer and continued backoff.
+- Engine lighting renews before its command TTL, with router ownership and blackout respected.
+- Landing invites Hold / Feel / Listen and explains the feather as a vessel for culture.
+
+Historical module descriptions above are an inventory, not a hardware certification.

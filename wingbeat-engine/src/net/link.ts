@@ -1,8 +1,7 @@
 // ============================================================================
 //  Remote controller link — pairs phones to a running console over WebRTC.
 //
-//  Unlike the /cam relay (a Vite dev-server WebSocket, which only exists on the
-//  LAN during `vite dev`), this uses PeerJS so it works from a static deploy
+//  Touch, microphone and /cam controllers all use PeerJS from a static deploy
 //  (Vercel) with no backend of our own. The console is the "host" and claims a
 //  peer id derived from a short Device ID + pairing Code; each phone is a
 //  "client" that connects to that id. The host accepts MANY clients at once, so
@@ -80,7 +79,32 @@ export interface ChannelAd {
   kind: 'part' | 'group';
 }
 
-export type HostMsg = { t: 'channels'; list: ChannelAd[] };
+/** What a paired phone is allowed to change, set by the host's operator:
+ *  play = motion only · fx = motion + the FX pad · full = also scene, tempo
+ *  and master volume. Enforced on the host; sent to phones so they hide what
+ *  they cannot use. */
+export type PhonePerms = 'play' | 'fx' | 'full';
+export const PHONE_PERMS: readonly PhonePerms[] = ['play', 'fx', 'full'];
+
+/** Whether a verb is allowed under a permission level (hello always is). */
+export function controlAllowed(perms: PhonePerms, t: Control['t']): boolean {
+  switch (t) {
+    case 'hello':
+    case 'motion':
+    case 'blow':
+      return true;
+    case 'fx':
+      return perms !== 'play';
+    default:
+      return perms === 'full';
+  }
+}
+
+export type HostMsg =
+  | { t: 'channels'; list: ChannelAd[] }
+  /** the host's real values, so a phone's sliders start (and stay) where the
+   *  installation actually is instead of at their own defaults */
+  | { t: 'state'; bpm: number; master: number; scene: string; perms: PhonePerms };
 
 const CODE_RE = /^[A-Z0-9]{3,8}$/;
 
@@ -89,6 +113,16 @@ const CODE_RE = /^[A-Z0-9]{3,8}$/;
 export function parseHostMsg(raw: unknown): HostMsg | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
+  if (r.t === 'state') {
+    const fin = (v: unknown, fb: number, lo: number, hi: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : fb);
+    return {
+      t: 'state',
+      bpm: Math.round(fin(r.bpm, 120, 40, 220)),
+      master: fin(r.master, 0.7, 0, 1),
+      scene: typeof r.scene === 'string' && /^[a-z0-9_]{1,40}$/.test(r.scene) ? r.scene : '',
+      perms: PHONE_PERMS.includes(r.perms as PhonePerms) ? (r.perms as PhonePerms) : 'full',
+    };
+  }
   if (r.t !== 'channels' || !Array.isArray(r.list)) return null;
   const list: ChannelAd[] = [];
   for (const it of r.list.slice(0, 24)) {
@@ -241,146 +275,151 @@ export interface HostHandle {
 
 /**
  * Console side: claim a room and listen for phones. `onControl` fires for every
- * message any connected phone sends; `onStatus` tracks the link; `onPeers`
- * reports the live controller count; `onLog` streams a human-readable trace.
+ * message any connected phone sends, with the sending phone's peer id (so a
+ * host can keep several hands apart — see net/arbiter.ts); `onDrop` fires when
+ * that phone goes away; `onStatus` tracks the link; `onPeers` reports the live
+ * controller count; `onLog` streams a human-readable trace.
  */
 export function startHost(opts: {
   deviceId?: string;
   code?: string;
-  onControl: (c: Control) => void;
+  onControl: (c: Control, from: string) => void;
+  onDrop?: (from: string) => void;
   onStatus: (s: LinkStatus) => void;
   onPeers?: (n: number) => void;
   onIdentity?: (deviceId: string, code: string) => void;
-  /** Called when a phone's channel opens — its return value is sent to that
-   *  phone right away (the channel directory greeting). */
-  hello?: () => HostMsg | null;
+  /** Called when a phone's channel opens — what it returns is sent to that
+   *  phone right away (the channel directory, the host's state). */
+  hello?: () => HostMsg | HostMsg[] | null;
   onLog?: Log;
 }): HostHandle {
   const log = opts.onLog ?? noop;
-  // A room id is exclusive on the PeerJS server, so a stale session or a second
-  // console tab can be holding it → 'unavailable-id'. Start from the requested
-  // codes but fall back to a fresh random room on collision, and report the
-  // room we actually landed on via onIdentity.
   let deviceId = opts.deviceId ?? randId(4);
   let code = opts.code ?? randId(4);
-  let peer: Peer;
+  let peer: Peer | null = null;
   let destroyed = false;
-  let tries = 0;
+  let collisions = 0;
+  let attempt = 0;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
   const conns = new Set<DataConnection>();
-
+  const pending = new Map<DataConnection, ReturnType<typeof setTimeout>>();
+  const count = () => [...conns].filter((c) => c.open).length;
   const report = () => {
-    opts.onPeers?.(conns.size);
-    opts.onStatus(conns.size ? 'peer' : 'ready');
+    const n = count();
+    opts.onPeers?.(n);
+    opts.onStatus(n ? 'peer' : peer?.open ? 'ready' : 'connecting');
   };
-
-  const bindConnections = (p: Peer) => {
+  const cancelRetry = () => { clearTimeout(retry); retry = undefined; };
+  const watch = (p: Peer) => {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      if (destroyed || p !== peer || p.open) return;
+      if (!count()) { p.destroy(); peer = null; }
+      schedule('signalling timed out');
+    }, 15000);
+  };
+  const schedule = (why: string) => {
+    if (destroyed || retry) return;
+    if (!count()) opts.onStatus('connecting');
+    const delay = Math.min(15000, 800 * 2 ** Math.min(attempt++, 5)) + Math.random() * 400;
+    log(`${why} — reconnecting in ${(delay / 1000).toFixed(1)}s`);
+    retry = setTimeout(() => {
+      retry = undefined;
+      if (destroyed) return;
+      if (!peer || peer.destroyed) claim();
+      else if (peer.disconnected) {
+        try { peer.reconnect(); watch(peer); } catch { if (!count()) { peer.destroy(); peer = null; claim(); } else schedule('signalling unavailable'); }
+      } else if (!peer.open) watch(peer);
+    }, delay);
+  };
+  const claim = () => {
+    if (destroyed) return;
+    opts.onStatus('connecting');
+    const p = new Peer(peerIdFor(deviceId, code), peerOptions());
+    peer = p;
+    watch(p);
+    p.on('open', () => {
+      if (destroyed || p !== peer) return;
+      attempt = 0; cancelRetry(); clearTimeout(watchdog);
+      opts.onIdentity?.(deviceId, code);
+      log('host ready — waiting for a phone');
+      report();
+    });
+    p.on('disconnected', () => {
+      if (p !== peer || destroyed) return;
+      report(); schedule('signalling lost');
+    });
+    p.on('error', (e) => {
+      if (p !== peer || destroyed) return;
+      const type = (e as { type?: string }).type ?? '';
+      log(`host error: ${type} ${(e as Error).message ?? e}`);
+      if (type === 'unavailable-id' && collisions++ < 6) {
+        p.destroy(); peer = null;
+        deviceId = randId(4); code = randId(4);
+        opts.onIdentity?.(deviceId, code);
+      } else if (!p.open && !count()) {
+        p.destroy(); peer = null;
+      }
+      if (!count()) opts.onStatus('error');
+      schedule(type || 'host error');
+    });
     p.on('connection', (conn) => {
-      log(`phone connecting: ${conn.peer}`);
+      if (destroyed || p !== peer) { conn.close(); return; }
       conns.add(conn);
+      const drop = () => {
+        clearTimeout(pending.get(conn)); pending.delete(conn);
+        if (!conns.delete(conn)) return;
+        opts.onDrop?.(conn.peer);
+        if (!destroyed) report();
+      };
+      pending.set(conn, setTimeout(() => { if (!conn.open) { conn.close(); drop(); } }, 15000));
       conn.on('open', () => {
-        log(`phone OPEN: ${conn.peer} (${conns.size} total)`);
-        watchIce(conn, log);
-        report();
+        if (destroyed || !conns.has(conn)) return;
+        clearTimeout(pending.get(conn)); pending.delete(conn);
+        watchIce(conn, log); report();
         const h = opts.hello?.();
-        if (h) {
-          try { conn.send(h); } catch { /* channel raced shut */ }
+        for (const m of h ? (Array.isArray(h) ? h : [h]) : []) {
+          try { conn.send(m); } catch { /* channel raced shut */ }
         }
       });
       conn.on('data', (d) => {
+        if (destroyed || !conn.open) return;
         const c = parseControl(d);
-        if (!c) return; // malformed / unknown verb — drop, never crash the host
-        if (c.t === 'hello') log(`hello from ${conn.peer}`);
-        try {
-          opts.onControl(c);
-        } catch (err) {
-          console.warn('[link] control handler failed', err);
-        }
+        if (!c) return;
+        try { opts.onControl(c, conn.peer); } catch (err) { log(`control failed: ${String(err)}`); }
       });
-      const drop = (why: string) => {
-        if (!conns.has(conn)) return;
-        conns.delete(conn);
-        log(`phone ${why}: ${conn.peer} (${conns.size} left)`);
-        report();
-      };
-      conn.on('close', () => drop('closed'));
-      conn.on('error', (e) => {
-        log(`phone error: ${(e as Error).message ?? e}`);
-        drop('errored');
-      });
+      conn.on('close', drop);
+      conn.on('error', () => { drop(); conn.close(); });
     });
   };
-
-  const claim = () => {
-    if (destroyed) return;
-    tries++;
-    const id = peerIdFor(deviceId, code);
-    log(`host starting, room=${id}`);
-    opts.onStatus('connecting');
-    peer = new Peer(id, peerOptions());
-    peer.on('open', () => {
-      log('host ready — waiting for a phone');
-      opts.onIdentity?.(deviceId, code);
-      report();
-    });
-    // The signalling server dropped us (sleep, wifi hop). Data channels that
-    // are already open keep working, but no NEW phone can find the room until
-    // we re-register — so do, with a short backoff.
-    peer.on('disconnected', () => {
-      if (destroyed) return;
-      log('signalling lost — re-registering room');
-      setTimeout(() => {
-        if (destroyed) return;
-        try { peer.reconnect(); } catch { claim(); }
-      }, 1000 + Math.random() * 1000);
-    });
-    peer.on('error', (e) => {
-      const type = (e as { type?: string }).type ?? '';
-      log(`host error: ${type} ${(e as Error).message ?? e}`);
-      console.warn('[link] host error', e);
-      // Room already taken (another tab / stale session) → grab a fresh room.
-      if (type === 'unavailable-id' && tries < 6 && !destroyed) {
-        try {
-          peer.destroy();
-        } catch {
-          /* already gone */
-        }
-        deviceId = randId(4);
-        code = randId(4);
-        log(`room taken — switching to ${peerIdFor(deviceId, code)}`);
-        setTimeout(claim, 250);
-        return;
-      }
-      if (!conns.size) opts.onStatus('error');
-    });
-    bindConnections(peer);
-  };
-
+  const offWake = watchNetworkWake(() => {
+    if (destroyed || peer?.open) return;
+    cancelRetry(); attempt = 0; schedule('network available');
+  });
   claim();
-
   return {
-    get deviceId() {
-      return deviceId;
-    },
-    get code() {
-      return code;
-    },
-    peerCount: () => conns.size,
-    broadcast(m) {
-      for (const c of conns) {
-        if (!c.open) continue;
-        try { c.send(m); } catch { /* mid-close */ }
-      }
-    },
+    get deviceId() { return deviceId; },
+    get code() { return code; },
+    peerCount: count,
+    broadcast(m) { for (const c of conns) if (c.open) { try { c.send(m); } catch { /* mid-close */ } } },
     destroy() {
       destroyed = true;
-      conns.forEach((c) => c.close());
-      try {
-        peer.destroy();
-      } catch {
-        /* already gone */
-      }
+      cancelRetry(); clearTimeout(watchdog); offWake();
+      pending.forEach(clearTimeout); pending.clear();
+      for (const c of [...conns]) c.close();
+      conns.clear(); peer?.destroy(); peer = null;
     },
   };
+}
+
+/** Re-arm networking after sleep or a Wi-Fi change; no listeners survive unmount. */
+function watchNetworkWake(wake: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const visible = () => { if (document.visibilityState === 'visible') wake(); };
+  window.addEventListener('online', wake);
+  document.addEventListener('visibilitychange', visible);
+  return () => { window.removeEventListener('online', wake); document.removeEventListener('visibilitychange', visible); };
 }
 
 export interface ClientHandle {
@@ -389,7 +428,7 @@ export interface ClientHandle {
 }
 
 /**
- * Phone side: connect to the console's room. Retries a few times so a phone that
+ * Phone side: connect to the console's room. Retries with backoff so a phone that
  * loads before the console is ready (or across a slow TURN handshake) still lands.
  */
 export function connectHost(
@@ -399,110 +438,82 @@ export function connectHost(
 ): ClientHandle {
   const log = opts.onLog ?? noop;
   const targetId = peerIdFor(deviceId, code);
-  const peer = new Peer(peerOptions());
+  let peer: Peer | null = null;
   let conn: DataConnection | null = null;
-  let attempts = 0;
   let destroyed = false;
-  let warnedClosed = false;
-  let redial: ReturnType<typeof setTimeout> | null = null;
-
-  // A phone is pocketed, locked, walks out of range and comes back — many
-  // times in one show. Keep dialing for as long as the page is open, with
-  // backoff + jitter so five phones waking together don't hammer the room in
-  // lock-step. `attempts` resets on every successful open, so the backoff
-  // restarts small after each drop rather than growing for the whole night.
-  const MAX_ATTEMPTS = 60;
-  const scheduleRedial = (why: string) => {
-    if (destroyed || redial) return;
-    if (attempts >= MAX_ATTEMPTS) {
-      log(`giving up after ${attempts} tries — tap connect to retry`);
-      opts.onStatus('error');
-      return;
-    }
-    const base = Math.min(15000, 1200 * Math.pow(1.5, Math.min(attempts, 8)));
-    const wait = Math.round(base + Math.random() * 600);
-    log(`${why} — redial in ${(wait / 1000).toFixed(1)}s`);
-    redial = setTimeout(() => {
-      redial = null;
-      dial();
-    }, wait);
+  let attempts = 0;
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let handshake: ReturnType<typeof setTimeout> | undefined;
+  const cancelRetry = () => { clearTimeout(retry); retry = undefined; };
+  const schedule = (why: string) => {
+    if (destroyed || retry) return;
+    if (!conn?.open) opts.onStatus('connecting');
+    const delay = Math.min(15000, 800 * 2 ** Math.min(attempts++, 5)) + Math.random() * 400;
+    log(`${why} — reconnecting in ${(delay / 1000).toFixed(1)}s`);
+    retry = setTimeout(() => { retry = undefined; recover(); }, delay);
   };
-
+  const watch = (p: Peer) => {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      if (destroyed || p !== peer || p.open) return;
+      if (!conn?.open) { p.destroy(); peer = null; }
+      schedule('signalling timed out');
+    }, 15000);
+  };
   const dial = () => {
-    if (destroyed) return;
-    if (peer.disconnected) {
-      // signalling is down; reconnect() re-fires 'open', which dials again
-      try { peer.reconnect(); } catch { /* destroyed */ }
-      return;
-    }
-    attempts++;
+    if (destroyed || !peer?.open || conn) return;
     opts.onStatus('connecting');
-    log(`dialing ${targetId} (try ${attempts})`);
     const c = peer.connect(targetId, { reliable: true });
     conn = c;
+    const drop = (why: string) => {
+      if (destroyed || conn !== c) return;
+      conn = null; clearTimeout(handshake); c.close();
+      schedule(why);
+    };
+    handshake = setTimeout(() => drop('data connection timed out'), 15000);
     c.on('open', () => {
-      attempts = 0;
-      warnedClosed = false;
-      log('DATA CHANNEL OPEN ✓');
-      watchIce(c, log);
-      opts.onStatus('peer');
+      if (destroyed || conn !== c) { c.close(); return; }
+      clearTimeout(handshake); attempts = 0; cancelRetry();
+      watchIce(c, log); opts.onStatus('peer');
       c.send({ t: 'hello' } satisfies Control);
     });
-    c.on('data', (d) => {
-      const m = parseHostMsg(d);
-      if (m) opts.onMsg?.(m);
-    });
-    c.on('close', () => {
-      if (conn === c) conn = null;
-      opts.onStatus('ready');
-      scheduleRedial('data channel closed');
-    });
-    c.on('error', (e) => {
-      log(`conn error: ${(e as Error).message ?? e}`);
-      if (conn === c) conn = null;
-      scheduleRedial('connection error');
+    c.on('data', (d) => { if (conn !== c || destroyed) return; const m = parseHostMsg(d); if (m) opts.onMsg?.(m); });
+    c.on('close', () => drop('data channel closed'));
+    c.on('error', () => drop('data connection error'));
+  };
+  const create = () => {
+    const p = new Peer(peerOptions());
+    peer = p; watch(p);
+    p.on('open', () => { if (destroyed || p !== peer) return; clearTimeout(watchdog); cancelRetry(); dial(); });
+    p.on('disconnected', () => { if (!destroyed && p === peer) schedule('signalling lost'); });
+    p.on('error', (e) => {
+      if (destroyed || p !== peer) return;
+      const type = (e as { type?: string }).type ?? '';
+      log(`peer error: ${type} ${(e as Error).message ?? e}`);
+      if (!conn?.open) {
+        const old = conn; conn = null; clearTimeout(handshake); old?.close();
+        if (!p.open) { p.destroy(); peer = null; }
+      }
+      schedule(type || 'peer error');
     });
   };
-
-  peer.on('open', (id) => {
-    log(`phone ready id=${id}`);
-    if (!conn || !conn.open) dial();
-  });
-  peer.on('disconnected', () => {
+  const recover = () => {
     if (destroyed) return;
-    log('signalling lost — reconnecting');
-    setTimeout(() => {
-      if (destroyed) return;
-      try { peer.reconnect(); } catch { /* destroyed */ }
-    }, 800 + Math.random() * 800);
-  });
-  peer.on('error', (e) => {
-    const type = (e as { type?: string }).type ?? '';
-    log(`peer error: ${type} ${(e as Error).message ?? ''}`);
-    console.warn('[link] client error', e);
-    // 'peer-unavailable' → the console room isn't up yet (or the codes are
-    // wrong). Keep trying: the console may simply be reloading.
-    if (type === 'peer-unavailable' || type === 'network' || type === 'server-error' || type === 'socket-error' || type === 'socket-closed') {
-      scheduleRedial(type || 'peer error');
-    } else {
-      opts.onStatus('error');
-    }
-  });
-
+    if (!peer || peer.destroyed) create();
+    else if (peer.disconnected) {
+      try { peer.reconnect(); watch(peer); } catch { if (!conn?.open) { peer.destroy(); peer = null; create(); } else schedule('signalling unavailable'); }
+    } else if (peer.open) dial();
+    else watch(peer);
+  };
+  const offWake = watchNetworkWake(() => { if (!conn?.open || !peer?.open) { cancelRetry(); attempts = 0; recover(); } });
+  create();
   return {
-    send(c) {
-      if (conn && conn.open) conn.send(c);
-      else if (!warnedClosed) {
-        warnedClosed = true;
-        log('send skipped — channel not open yet');
-      }
-    },
+    send(c) { if (conn?.open) { try { conn.send(c); } catch { conn.close(); } } },
     destroy() {
       destroyed = true;
-      if (redial) clearTimeout(redial);
-      redial = null;
-      conn?.close();
-      peer.destroy();
+      cancelRetry(); clearTimeout(watchdog); clearTimeout(handshake); offWake();
+      conn?.close(); conn = null; peer?.destroy(); peer = null;
     },
   };
 }

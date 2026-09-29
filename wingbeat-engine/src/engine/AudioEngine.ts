@@ -17,6 +17,9 @@
 // ============================================================================
 
 import * as Tone from 'tone';
+import { SpeakerOutput } from './SpeakerOutput.ts';
+import { audioStartDeadline } from './audioStart.ts';
+import { nodeGain, perSpeakerGain } from './spatial.ts';
 import type { WingbeatEngine } from './WingbeatEngine.ts';
 import { getScene } from './scenes.ts';
 import { loadJson, saveJson } from '../sim/persisted.ts';
@@ -71,6 +74,37 @@ export class AudioEngine {
   private loopNativeBpm = LOOP_NATIVE_BPM;
 
   private master!: Tone.Gain;
+  private stereoGate!: Tone.Gain;
+  private speakers?: SpeakerOutput;
+  outputMode: 'stereo' | 'quad' = 'stereo';
+  outputError = '';
+  get outputChannels(): number { return this.ready ? (Tone.getContext().rawContext as AudioContext).destination.maxChannelCount : 0; }
+
+  setOutputMode(mode: 'stereo' | 'quad'): void {
+    if (!this.ready) throw new Error('Start audio before selecting the speaker output.');
+    if (mode === 'quad') {
+      if (this.outputChannels < 4) throw new Error('This audio device exposes fewer than four channels. Connect a four-output interface and reopen the page. Stereo remains active.');
+      if (!this.speakers) {
+        this.speakers = new SpeakerOutput(Tone.getContext().rawContext as AudioContext);
+        for (const layer of LAYER_NAMES) this.addSpeakerSource(layer, this.buses[layer], [1, 1, 1, 1]);
+        if (this.layerPan) this.addSpeakerSource('layers', this.layerPan, [1, 1, 1, 1]);
+        for (const [id, loop] of this.loops) this.addSpeakerSource(`loop:${id}`, loop.fader, nodeGain(id));
+      }
+      this.speakers.setMaster(this.running ? this.masterGainValue : 0);
+      this.speakers.effects(this.fx, this.reverbWet, this.bpm);
+      this.speakers.setEnabled(true);
+    } else this.speakers?.setEnabled(false);
+    this.stereoGate.gain.rampTo(mode === 'stereo' ? 1 : 0, 0.05);
+    this.outputMode = mode;
+    this.outputError = '';
+  }
+
+  private addSpeakerSource(id: string, source: Tone.ToneAudioNode, weights: readonly number[]): void {
+    this.speakers?.addSource(id, (target) => {
+      source.connect(target);
+      return () => { try { source.disconnect(target); } catch { /* already disposed */ } };
+    }, weights);
+  }
   private reverb!: Tone.Reverb;
   // master FX section (the phone's XY pad): high-pass → low-pass → delay,
   // then the existing reverb. Neutral = inaudible; see setFx.
@@ -192,10 +226,13 @@ export class AudioEngine {
 
   private async buildGraph(masterGain: number): Promise<void> {
     this.masterGainValue = masterGain;
-    await Tone.start();
+    await audioStartDeadline(Tone.start());
 
-    this.reverb = new Tone.Reverb({ decay: 6, wet: this.reverbWet }).toDestination();
-    await this.reverb.generate();
+    this.stereoGate = new Tone.Gain(1).toDestination();
+    this.reverb = new Tone.Reverb({ decay: 6, wet: this.reverbWet }).connect(this.stereoGate);
+    try { await audioStartDeadline(this.reverb.ready); } catch (error) {
+      this.reverb.dispose(); this.stereoGate.dispose(); throw error;
+    }
     this.master = new Tone.Gain(masterGain);
     // master → HP → LP → delay → reverb. All neutral until the FX pad moves.
     this.fxHp = new Tone.Filter(20, 'highpass');
@@ -282,6 +319,7 @@ export class AudioEngine {
     if (!this.running) {
       this.running = true;
       this.master.gain.rampTo(this.masterGainValue, 0.3);
+      this.speakers?.setMaster(this.masterGainValue, 0.1);
       if (this.engine) this.startBed(this.engine.scene);
       for (const [, l] of this.loops) l.gain.gain.rampTo(l.target, 0.3);
     }
@@ -299,6 +337,7 @@ export class AudioEngine {
     this.noiseGain.gain.rampTo(0, 0.2);
     for (const [, l] of this.loops) l.gain.gain.rampTo(0, 0.25);
     this.master.gain.rampTo(0, 0.3);
+    this.speakers?.setMaster(0, 0.1);
     await new Promise((r) => setTimeout(r, 350));
     if (this.running) return; // start() won the race
     try {
@@ -312,6 +351,9 @@ export class AudioEngine {
    *  construct a new AudioEngine afterwards. */
   dispose(): void {
     this.detach();
+    this.speakers?.dispose();
+    this.speakers = undefined;
+    this.outputMode = 'stereo';
     for (const id of [...this.loops.keys()]) this.clearLoop(id);
     (['melody', 'perc', 'accent'] as SampleLayer[]).forEach((l) => this.clearSample(l));
     this.layerPlayers.forEach((p) => p.dispose());
@@ -322,7 +364,7 @@ export class AudioEngine {
         this.fxHp, this.fxLp, this.fxDelay,
         this.perc, this.percPan, this.bell, this.bellPan, this.layerSynth, this.layerPan,
         this.buses?.bed, this.buses?.wind, this.buses?.melody, this.buses?.perc, this.buses?.accent,
-        this.meter, this.master, this.reverb,
+        this.meter, this.master, this.reverb, this.stereoGate,
       ];
       for (const n of nodes) { try { n?.dispose(); } catch { /* already disposed */ } }
     }
@@ -354,14 +396,15 @@ export class AudioEngine {
 
   setMasterGain(g: number) {
     this.masterGainValue = g;
-    if (this.master) this.master.gain.rampTo(g, 0.3);
+    if (this.master) this.master.gain.rampTo(this.running ? g : 0, 0.3);
+    this.speakers?.setMaster(this.running ? g : 0);
   }
 
   /** Resume the audio context (call from a user gesture if sound stopped). */
   async resume(): Promise<void> {
-    await Tone.start();
+    await audioStartDeadline(Tone.start());
     const ctx = Tone.getContext().rawContext as AudioContext;
-    if (ctx.state === 'suspended') await ctx.resume();
+    if (ctx.state === 'suspended') await audioStartDeadline(ctx.resume());
   }
 
   /** Play a loaded sample once, now — used by the mixer's preview button. */
@@ -386,6 +429,15 @@ export class AudioEngine {
     if (!this.meter) return 0;
     const v = this.meter.getValue();
     return typeof v === 'number' ? Math.min(1, Math.max(0, v)) : 0;
+  }
+
+  get analysisContext(): AudioContext | null {
+    return this.ready ? Tone.getContext().rawContext as AudioContext : null;
+  }
+
+  connectAnalysis(node: AudioNode): () => void {
+    this.master.connect(node);
+    return () => { try { this.master.disconnect(node); } catch { /* graph disposed */ } };
   }
 
   // ---- Mixer -------------------------------------------------------------
@@ -469,6 +521,7 @@ export class AudioEngine {
    *  floor, the FX pad pushes above it, release falls back to the floor. */
   private applyReverbWet(ramp = 0.1) {
     if (!this.ready) return;
+    this.speakers?.effects(this.fx, this.reverbWet, this.bpm);
     this.reverb.wet.rampTo(Math.max(0, Math.min(1, Math.max(this.reverbWet, this.fxReverbAmt))), ramp);
   }
 
@@ -517,7 +570,8 @@ export class AudioEngine {
 
   /** Play a layer's sound (sample or generated pattern) — called on each trigger. */
   playLayer(idx: number, mode: 'synth' | 'sample' | 'pattern', seed: number, note: string, vel: number, pan: number) {
-    if (!this.ready) return;
+    if (!this.ready || !this.running) return;
+    this.speakers?.position('layers', perSpeakerGain({ x: (pan + 1) / 2, y: 0.5 }));
     if (mode === 'sample') {
       const p = this.layerPlayers.get(idx);
       if (p && p.loaded) {
@@ -569,6 +623,7 @@ export class AudioEngine {
   setBpm(bpm: number) {
     if (!Number.isFinite(bpm) || bpm <= 0) return;
     this.bpm = bpm;
+    this.speakers?.effects(this.fx, this.reverbWet, this.bpm);
     if (this.transportOn) Tone.getTransport().bpm.rampTo(bpm, 0.1);
     const rate = this.loopRate();
     for (const [, l] of this.loops) l.player.playbackRate = rate;
@@ -619,6 +674,7 @@ export class AudioEngine {
     player.connect(fft);                              // RAW spectrum → low/mid/high bands,
     //   so the layer reacts to the loop's sound even before its volume is up.
     this.loops.set(sensorId, { player, gain, fader, meter, fft, target: 0, name: label });
+    this.addSpeakerSource(`loop:${sensorId}`, fader, nodeGain(sensorId));
     // SYNC — every loop plays as if it had been running since transport time 0.
     //
     // Files finish decoding at different moments, and a conductor push reloads
@@ -643,6 +699,7 @@ export class AudioEngine {
     }
   }
   clearLoop(sensorId: string) {
+    this.speakers?.removeSource(`loop:${sensorId}`);
     const l = this.loops.get(sensorId);
     if (l) {
       try { l.player.stop(); } catch { /* not started */ }
@@ -666,7 +723,7 @@ export class AudioEngine {
     if (!l) return;
     const g = Math.max(0, Math.min(1.4, v));
     l.target = g;
-    l.gain.gain.rampTo(g, 0.12);
+    l.gain.gain.rampTo(this.running ? g : 0, 0.12);
   }
   // ---- loop channel strip (the operator's mixer, independent of triggering) --
   //
@@ -819,8 +876,9 @@ export class AudioEngine {
       }),
     );
     this.detachers.push(
-      engine.on('wind', ({ maxWind }) => {
-        if (!this.ready) return;
+      engine.on('wind', ({ maxWind, perSpeakerGain }) => {
+        if (!this.ready || !this.running) return;
+        this.speakers?.position('wind', perSpeakerGain);
         this.noiseGain.gain.rampTo(maxWind * 0.18, 0.1);
         this.noiseFilter.frequency.rampTo(300 + maxWind * 1800, 0.2);
       }),
@@ -835,8 +893,9 @@ export class AudioEngine {
       }),
     );
     this.detachers.push(
-      engine.on('melody', ({ note, velocity, pan }) => {
-        if (!this.ready) return;
+      engine.on('melody', ({ id, note, velocity, pan }) => {
+        if (!this.ready || !this.running) return;
+        this.speakers?.position('melody', nodeGain(id));
         const rate = Tone.Frequency(note).toFrequency() / C4;
         if (this.playSample('melody', rate, pan)) return;
         this.pluckPan.pan.rampTo(pan, 0.05);
@@ -844,16 +903,18 @@ export class AudioEngine {
       }),
     );
     this.detachers.push(
-      engine.on('perc', ({ note, velocity, pan }) => {
-        if (!this.ready) return;
+      engine.on('perc', ({ id, note, velocity, pan }) => {
+        if (!this.ready || !this.running) return;
+        this.speakers?.position('perc', nodeGain(id));
         if (this.playSample('perc', 1, pan)) return;
         this.percPan.pan.rampTo(pan, 0.05);
         this.perc.triggerAttackRelease(note, '8n', undefined, velocity);
       }),
     );
     this.detachers.push(
-      engine.on('accent', ({ note, velocity, pan }) => {
-        if (!this.ready) return;
+      engine.on('accent', ({ id, note, velocity, pan }) => {
+        if (!this.ready || !this.running) return;
+        this.speakers?.position('accent', nodeGain(id));
         if (this.playSample('accent', 1, pan)) return;
         this.bellPan.pan.rampTo(pan, 0.05);
         this.bell.triggerAttackRelease(note, '2n', undefined, velocity);

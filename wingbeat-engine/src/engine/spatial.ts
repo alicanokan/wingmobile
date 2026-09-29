@@ -2,7 +2,7 @@
 //  Wing Beat — Spatial model of the room
 //
 //  This reproduces the layout diagram: a projection SCREEN on the left, four
-//  corner SPEAKERS, a central INTERACTION zone ringed by 8 wind-sensors, and
+//  corner SPEAKERS, a central INTERACTION zone surrounded by 5 wind-sensors, and
 //  the FEATHER prop off to the right. Coordinates are normalized 0..1 with
 //  origin at the top-left, so the same numbers drive the SVG operator map and
 //  the audio panning math.
@@ -80,9 +80,8 @@ export function panForNode(id: string): number {
  * Per-speaker gain (0..1) for a sound at `src`, by inverse-distance weighting.
  * The 4 numbers come back in LAYOUT.speakers order [FL, FR, BL, BR].
  *
- * The browser sim outputs stereo, but the engine still computes these so the
- * operator map can show which speakers light up — and so the real install
- * (where you DO have 4 amps) can route audio per-speaker with no extra code.
+ * The map displays these weights. AudioEngine also uses them for the optional
+ * discrete four-speaker output on a compatible audio interface.
  */
 export function perSpeakerGain(src: Point): number[] {
   const dists = LAYOUT.speakers.map((s) => {

@@ -17,6 +17,7 @@ import { replayGestureTraceRealtime } from '../engine/replay.ts';
 import { AudioEngine } from '../engine/AudioEngine.ts';
 import { SCENES, getScene } from '../engine/scenes.ts';
 import { ledService } from '../led/ledService.ts';
+import { engineLedInputs } from '../led/engineInputs.ts';
 import { midiOut } from '../midi/MidiOut.ts';
 import { SimTransport } from '../transports/SimTransport.ts';
 import { MqttTransport } from '../transports/MqttTransport.ts';
@@ -25,7 +26,7 @@ import { useEngineSnapshot } from './useEngine.ts';
 import { OperatorMap } from './OperatorMap.tsx';
 import { Projection } from './Projection.tsx';
 import { FEATHERS, DEFAULT_FEATHER } from './feathers.ts';
-import { rig, snapshotPreset, onLayersChange } from './rig.ts';
+import { rig, snapshotPreset, onLayersChange, onRigChange } from './rig.ts';
 import { saveLast } from './presets.ts';
 import { createBroadcaster, presenceWatch } from './sync.ts';
 import { ScenePanel } from './ScenePanel.tsx';
@@ -34,7 +35,9 @@ import { DevicesPanel, DeviceHud } from './DevicesPanel.tsx';
 import { Landing, type EntryMode } from './Landing.tsx';
 import { useTheme, themeClass } from './theme.ts';
 import { MobileMenu } from './MobileMenu.tsx';
-import { startHost, type HostHandle, type LinkStatus } from '../net/link.ts';
+import { startHost, controlAllowed, PHONE_PERMS, type HostHandle, type HostMsg, type LinkStatus, type PhonePerms } from '../net/link.ts';
+import { InputArbiter } from '../net/arbiter.ts';
+import { loadJson, saveJson, oneOf } from './persisted.ts';
 import { useConductorSync, applySensorSamples, lastAppliedSamples } from '../net/liveSync.ts';
 import type { PresetBundle, PresetContext } from './presets.ts';
 import { SettingsPanel } from './SettingsPanel.tsx';
@@ -176,7 +179,32 @@ export default function App() {
   // the Controllers panel.
   const linksRef = useRef<HostHandle[]>([]);
   const deviceMotion = useRef<number[]>(Array(DEVICE_COUNT).fill(0));
-  const deviceStale = useRef<Array<ReturnType<typeof setTimeout> | undefined>>(Array(DEVICE_COUNT).fill(undefined));
+  const phoneInputs = useMemo(() => new InputArbiter(DEVICE_COUNT), []);
+  const [phonePerms, setPhonePerms] = useState<PhonePerms>(() => loadJson('wb.consolePhonePerms.v1', (raw) => oneOf(raw, PHONE_PERMS, 'full')));
+  const phonePermsRef = useRef(phonePerms);
+  phonePermsRef.current = phonePerms;
+  const masterGainRef = useRef(masterGain);
+  masterGainRef.current = masterGain;
+  const phoneState = (): HostMsg => ({ t: 'state', bpm: rig.global.bpm, master: masterGainRef.current, scene: engine.scene, perms: phonePermsRef.current });
+  useEffect(() => {
+    saveJson('wb.consolePhonePerms.v1', phonePerms);
+    if (phonePerms === 'play') phoneInputs.clearFx();
+    linksRef.current.forEach((h) => h.broadcast(phoneState()));
+  }, [phonePerms, masterGain]);
+  useEffect(() => {
+    const broadcast = () => linksRef.current.forEach((h) => h.broadcast(phoneState()));
+    const offScene = engine.on('scene', broadcast);
+    const offRig = onRigChange(broadcast);
+    let lastFx = '';
+    const timer = setInterval(() => {
+      const now = performance.now();
+      for (let i = 0; i < DEVICE_COUNT; i++) deviceMotion.current[i] = phoneInputs.level(i, now);
+      const f = phoneInputs.fxState(now);
+      const key = `${f.x}:${f.y}:${f.on}`;
+      if (key !== lastFx) { audio.setFx(f.x, f.y, f.on); lastFx = key; }
+    }, 33);
+    return () => { clearInterval(timer); offScene(); offRig(); };
+  }, [engine, audio, phoneInputs]);
   const [deviceInfo, setDeviceInfo] = useState<Array<{ deviceId: string; code: string } | null>>(Array(DEVICE_COUNT).fill(null));
   const [deviceStatus, setDeviceStatus] = useState<LinkStatus[]>(Array(DEVICE_COUNT).fill('idle'));
   const [devicePeers, setDevicePeers] = useState<number[]>(Array(DEVICE_COUNT).fill(0));
@@ -290,14 +318,6 @@ export default function App() {
       rooms[i] = { deviceId, code };
       try { localStorage.setItem(DEVICE_ROOMS_KEY, JSON.stringify(rooms)); } catch { /* private mode */ }
     };
-    const feedDevice = (i: number, v: number) => {
-      deviceMotion.current[i] = Math.max(0, Math.min(1, v));
-      const t = deviceStale.current;
-      if (t[i]) clearTimeout(t[i]);
-      t[i] = setTimeout(() => {
-        deviceMotion.current[i] = 0;
-      }, 1500);
-    };
     linksRef.current = Array.from({ length: DEVICE_COUNT }, (_, i) => {
       const tag = `D${i + 1}`;
       return startHost({
@@ -310,11 +330,14 @@ export default function App() {
         },
         onPeers: (n) => setAt(setDevicePeers, i, n),
         onLog: (msg) => setLinkLog((l) => [...l.slice(-160), `${tag}: ${msg}`]),
-        onControl: (c) => {
+        hello: () => phoneState(),
+        onDrop: (from) => phoneInputs.drop(from),
+        onControl: (c, from) => {
+          if (!controlAllowed(phonePermsRef.current, c.t)) return;
           switch (c.t) {
             case 'motion':
             case 'blow':
-              feedDevice(i, c.v);
+              phoneInputs.feed(from, [i], c.v, performance.now());
               break;
             case 'scene':
               // write-through to the feather→scene map, or the next feather
@@ -332,13 +355,14 @@ export default function App() {
               const bpm = Math.max(40, Math.min(220, Math.round(v)));
               rig.global.bpm = bpm;
               audio.setBpm(bpm);
+              linksRef.current.forEach((h) => h.broadcast(phoneState()));
               break;
             }
             case 'master':
               setMasterGain(Math.max(0, Math.min(1, c.v)));
               break;
             case 'fx':
-              audio.setFx(c.x, c.y, c.on);
+              phoneInputs.feedFx(from, c.x, c.y, c.on, performance.now());
               break;
           }
         },
@@ -383,7 +407,7 @@ export default function App() {
 
   useEffect(
     () => () => {
-      deviceStale.current.forEach((t) => t && clearTimeout(t));
+      phoneInputs.clear();
       linksRef.current.forEach((h) => h.destroy());
       linksRef.current = []; // allow a remount (dev StrictMode) to re-create them
     },
@@ -647,6 +671,11 @@ export default function App() {
         const v = Math.min(1, (partVal[p.id] ?? 0) * sens);
         const source = partSource[p.id] ?? 'simulation';
         if (v > 0.001) {
+          const previousSource = drivenSources.get(p.id);
+          if (previousSource && previousSource !== source) {
+            sim.releaseWind(p.id, previousSource);
+            sim.setPresence(p.id, false, previousSource);
+          }
           sim.holdWind(p.id, v, source);
           sim.setPresence(p.id, v > 0.05, source);
           driven.add(p.id);
@@ -719,22 +748,7 @@ export default function App() {
   // router's publish ceiling, so nothing is lost to the rate gate.
   useEffect(() => {
     const id = setInterval(() => {
-      const sensors: Record<string, { wind: number; motion: number; present: boolean; hue: number }> = {};
-      const expression = engine.getExpressiveState();
-      const nodes = engine.getNodes();
-      for (let index = 0; index < nodes.length; index++) {
-        const n = nodes[index];
-        // A low-detail near → across-room path derived from body motion. LEDs
-        // no longer duplicate the raw input meter.
-        const path = Math.max(0, 1 - Math.abs(index / Math.max(1, nodes.length - 1) - expression.spatialBreadth) * 2.2);
-        sensors[n.id] = {
-          wind: Math.min(1, expression.fringeLoad * 0.35 + expression.spatialBreadth * path * 0.65),
-          motion: expression.vaneLoad * path,
-          present: expression.phase !== 'rest',
-          hue: (((n.hue % 360) + 360) % 360) / 360,
-        };
-      }
-      ledService.push({ sensors, sceneLed: getScene(engine.scene).led });
+      ledService.push(engineLedInputs(engine));
     }, 40);
     return () => clearInterval(id);
   }, [engine]);
@@ -953,7 +967,12 @@ export default function App() {
     };
   }, [transport]);
 
+  const [audioBusy, setAudioBusy] = useState(false);
+  const [audioError, setAudioError] = useState('');
   const startAudio = async () => {
+    if (audioBusy) return;
+    setAudioBusy(true); setAudioError('');
+    try {
     if (audioReady) {
       // genuinely stop: bed released, loops gated, context suspended
       await audio.stop();
@@ -963,9 +982,14 @@ export default function App() {
     audio.setMasterGain(masterGain);
     await audio.start();
     setAudioReady(true);
+    } catch (e) { setAudioError(e instanceof Error ? e.message : 'Audio could not start. Try again.'); }
+    finally { setAudioBusy(false); }
   };
 
   const startPerformance = async () => {
+    if (audioBusy) return;
+    setAudioBusy(true); setAudioError('');
+    try {
     engine.hold(false);
     engine.setPatterns(false);
     if (!audioReady) {
@@ -974,6 +998,8 @@ export default function App() {
       setAudioReady(true);
     }
     setPerformanceState('running');
+    } catch (e) { setAudioError(e instanceof Error ? e.message : 'Audio could not start. Try again.'); }
+    finally { setAudioBusy(false); }
   };
   const holdPerformance = () => {
     engine.hold(true);
@@ -1014,6 +1040,8 @@ export default function App() {
   const sim = transport?.kind === 'sim' ? (transport as SimTransport) : null;
   const featherLabel = FEATHERS.find((f) => f.id === feather)?.label ?? feather;
 
+  const audioAlert = audioError ? <div role="alert" style={{ position: 'fixed', bottom: 20, left: 20, right: 20, zIndex: 200, padding: 16, background: '#251c18', color: '#fff' }}>{audioError}</div> : null;
+
   // ---- Landing (shown every visit) --------------------------------------
   if (entryMode === null) {
     return <Landing onPick={setEntryMode} />;
@@ -1023,11 +1051,12 @@ export default function App() {
     const online = snapshot.nodes.filter((node) => node.online).length;
     return <div className={`wb-performance ${themeClass(theme)} ${reducedMotion ? 'reduced' : ''}`}>
       <Projection engine={engine} audio={audio} featherId={feather} paused={performanceState === 'held' || performanceState === 'stopped'} />
+      {audioAlert}
       <aside className="wb-performance-panel">
         <header><div><small>PERFORMANCE</small><strong>{featherLabel}</strong></div><button onClick={() => setEntryMode(null)}>Exit</button></header>
         <div className="wb-performance-phase"><span>Encounter phase</span><strong>{encounterPhase.replace(/([A-Z])/g, ' $1')}</strong></div>
         <div className="wb-performance-actions">
-          <button className="primary" onClick={startPerformance}>Start</button>
+          <button className="primary" disabled={audioBusy} onClick={startPerformance}>{audioBusy ? 'Starting…' : 'Start'}</button>
           <button onClick={holdPerformance} disabled={performanceState !== 'running'}>Hold</button>
           <button onClick={settlePerformance} disabled={performanceState === 'stopped'}>Settle</button>
           <button onClick={stopPerformance}>Stop</button>
@@ -1064,6 +1093,7 @@ export default function App() {
   if (entryMode === 'mobile') {
     return (
       <div className={`wb-mobileexp ${themeClass(theme)}`}>
+        {audioAlert}
         <Projection engine={engine} audio={audio} featherId={feather} paused={false} />
 
         <div className="wb-mx-brand"><b>Wing Beat</b><i>·</i>mobile</div>
@@ -1071,7 +1101,7 @@ export default function App() {
         {!mobileMenu && !showPair && !camOn && <DeviceHud peers={devicePeers} levels={levels} onOpen={() => setShowPair(true)} />}
 
         <div className="wb-mx-top">
-          <button className={`wb-mx-icon ${audioReady ? 'on' : ''}`} onClick={startAudio} title={audioReady ? 'stop audio' : 'start audio'}>
+          <button className={`wb-mx-icon ${audioReady ? 'on' : ''}`} disabled={audioBusy} onClick={startAudio} title={audioReady ? 'stop audio' : 'start audio'}>
             {audioReady ? '♪' : '🔊'}
           </button>
           <button className="wb-mx-icon" onClick={() => setEntryMode(null)} title="back to menu">
@@ -1127,7 +1157,7 @@ export default function App() {
 
         <div className="wb-panels">
           {showPair && (
-            <DevicesPanel devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} thresholds={deviceThresholds} onThresholdChange={setDeviceThreshold} />
+            <DevicesPanel phonePerms={phonePerms} onPhonePerms={setPhonePerms} devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} thresholds={deviceThresholds} onThresholdChange={setDeviceThreshold} />
           )}
           {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} compact={entryMode === 'mobile'} />}
         </div>
@@ -1206,7 +1236,7 @@ export default function App() {
 
         <div className="wb-rail-sec">Audio</div>
         <div className="wb-rail-group">
-          <button className={`wb-btn accent ${audioReady ? 'active' : ''}`} onClick={startAudio} title={audioReady ? 'click to stop audio' : 'click to start audio'}>
+          <button className={`wb-btn accent ${audioReady ? 'active' : ''}`} disabled={audioBusy} onClick={startAudio} title={audioReady ? 'click to stop audio' : 'click to start audio'}>
             {audioReady ? '♪ Stop audio' : 'Start audio'}
           </button>
           <div className="wb-knob-row">
@@ -1368,7 +1398,7 @@ export default function App() {
         />
       )}
       {showPair && (
-        <DevicesPanel
+        <DevicesPanel phonePerms={phonePerms} onPhonePerms={setPhonePerms}
           devices={deviceInfo}
           statuses={deviceStatus}
           peers={devicePeers}
@@ -1383,6 +1413,7 @@ export default function App() {
       {micOn && <MicPanel mic={mic} onClose={() => setMicOn(false)} />}
       {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} />}
       {showRig && <RigPanel snapshot={snapshot} audio={audio} onClose={() => setShowRig(false)} presetContext={presetContext} onPresetRecall={onPresetRecall} />}
+      {audioAlert}
       {showSettings && (
         <SettingsPanel
           audio={audio}
@@ -1455,7 +1486,7 @@ export default function App() {
             </div>
           )}
           {showPair && (
-            <DevicesPanel devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} thresholds={deviceThresholds} onThresholdChange={setDeviceThreshold} />
+            <DevicesPanel phonePerms={phonePerms} onPhonePerms={setPhonePerms} devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} thresholds={deviceThresholds} onThresholdChange={setDeviceThreshold} />
           )}
           <Projection engine={engine} audio={audio} featherId={feather} paused={featherOpen} />
         </div>

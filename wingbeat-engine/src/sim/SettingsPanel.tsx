@@ -1,3 +1,4 @@
+import { AudioOutputPanel } from './AudioOutputPanel.tsx';
 // ============================================================================
 //  Settings + Mixer panel.
 //
@@ -78,6 +79,7 @@ export function SettingsPanel({ audio, engine, audioReady, masterGain, onMaster,
         <span className="wb-sample-name muted">{engine.patternsOn ? 'generative pulse on' : 'sensors + loops only'}</span>
       </div>
 
+      <AudioOutputPanel audio={audio} />
       {/* MIXER */}
       <div className="wb-settings-section">Mixer</div>
       <div className="wb-mix-row">

@@ -64,7 +64,9 @@ export class SimTransport extends BaseTransport {
     if (this.heldTimer) clearInterval(this.heldTimer);
     if (this.staleTimer) clearInterval(this.staleTimer);
     this.heldTimer = this.staleTimer = null;
+    for (const [id, held] of this.held) this.engine?.ingestWind(id, 0, held.source);
     this.held.clear();
+    this.engine?.clearInputSource('simulation');
     super.disconnect();
   }
 

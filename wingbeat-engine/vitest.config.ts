@@ -7,6 +7,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
+    // Audio synthesis and long signal traces are CPU-heavy; avoid starting
+    // one worker per file alongside the renderer or on a small CI machine.
+    maxWorkers: 4,
     include: ['src/**/*.test.ts'],
     setupFiles: ['./src/test/setup.ts'],
   },

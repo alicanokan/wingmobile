@@ -15,6 +15,19 @@ const wind = (value: number, timestamp: number): CalibratedInputSample => ({
 });
 
 describe('EncounterModel', () => {
+  it('aggregates presence across nodes and releases only the lost node', () => {
+    const model = new EncounterModel();
+    const presence = (id: string, value: number) => ({ ...wind(value, 1000), nodeId: id, kind: 'presence' as const });
+    model.ingest(presence('sensor_01', 1));
+    model.ingest(presence('sensor_02', 0));
+    expect(model.advanceTo(1000).state.phase).toBe('presence');
+    model.ingest(presence('sensor_02', 1));
+    model.releaseNode('sensor_01');
+    expect(model.advanceTo(1100).state.phase).toBe('presence');
+    model.releaseNode('sensor_02');
+    expect(model.advanceTo(1200).state.phase).toBe('rest');
+  });
+
   it('stores a bounded gesture envelope and enters remembered encounter', () => {
     const model = new EncounterModel();
     model.ingest(wind(0.2, 1000));

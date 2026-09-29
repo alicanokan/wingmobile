@@ -51,6 +51,58 @@ describe('WingbeatEngine triggers', () => {
 });
 
 describe('WingbeatEngine scene + staleness', () => {
+  it('releases a lost sensor, decays its encounter and recovers on a fresh packet', () => {
+    let t = 0;
+    const e = new WingbeatEngine({ clock: () => t });
+    const winds = collect(e, 'wind') as Extract<EngineEvent, { type: 'wind' }>[];
+    e.ingestWind('sensor_01', 0.9, 'mqtt');
+    e.ingestPresence('sensor_01', true, 'mqtt');
+    for (t = 50; t <= 12000; t += 50) e.tick(t);
+    expect(e.getNode('sensor_01')).toMatchObject({ online: false, wind: 0, motion: 0, present: false });
+    expect(e.getExpressiveState().energy).toBeLessThan(0.01);
+    expect(e.getExpressiveState().phase).toBe('rest');
+    expect(winds.at(-1)?.maxWind).toBe(0);
+    e.ingestWind('sensor_01', 0.4, 'mqtt');
+    expect(e.getNode('sensor_01')).toMatchObject({ online: true, wind: 0.4 });
+  });
+
+  it('releases an offline notification immediately, without waiting for expiry', () => {
+    const e = new WingbeatEngine();
+    e.ingestWind('sensor_01', 0.8, 'mqtt');
+    e.ingestPresence('sensor_01', true, 'mqtt');
+    e.ingestStatus('sensor_01', { online: false });
+    expect(e.getNode('sensor_01')).toMatchObject({ online: false, wind: 0, present: false });
+  });
+
+  it('keeps hardware and touch contributions separate when a hand releases', () => {
+    const e = new WingbeatEngine();
+    e.ingestWind('sensor_01', 0.6, 'mqtt');
+    e.ingestWind('sensor_01', 0.9, 'touch');
+    e.ingestWind('sensor_01', 0, 'touch');
+    expect(e.getNode('sensor_01')?.wind).toBe(0.6);
+    e.clearInputSource('mqtt');
+    expect(e.getNode('sensor_01')?.wind).toBe(0);
+  });
+
+  it('expires missing wind measurements even while status/motion still arrive', () => {
+    let t = 0;
+    const e = new WingbeatEngine({ clock: () => t });
+    e.ingestWind('sensor_01', 0.9, 'mqtt');
+    for (t = 100; t <= 9000; t += 100) {
+      e.ingestMotion('sensor_01', 0, 'mqtt');
+      e.tick(t);
+    }
+    expect(e.getNode('sensor_01')).toMatchObject({ online: true, wind: 0 });
+  });
+
+  it('does not let invalid values or times poison node state', () => {
+    const e = new WingbeatEngine();
+    e.ingestWind('sensor_01', 0.4);
+    e.ingestWind('sensor_01', NaN);
+    e.ingestWind('sensor_01', 1, 'mqtt', NaN);
+    expect(e.getNode('sensor_01')?.wind).toBe(0.4);
+  });
+
   it('rejects unknown scene keys instead of storing them', () => {
     const e = new WingbeatEngine();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
