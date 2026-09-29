@@ -233,3 +233,13 @@ All pending code, interface, documentation and workflow changes in the parent
 repository are included. The nested `twinbeats` directory is a separate Git
 repository with pre-existing untracked files; it is not part of this commit.
 Public deployment is not verified by this report.
+
+
+## Clean-build asset correction
+
+The first GitHub run exposed a difference from the local checkout: the parent
+repository ignored PNG, WAV and MP4 files, so the feather-analysis and audio
+library tests could not read their required media. The app now explicitly
+tracks its feather photographs and thumbnails, fifty generated audio loops,
+and landing video. Clean checkouts and production deployments therefore receive
+the same runtime assets as the local preview.

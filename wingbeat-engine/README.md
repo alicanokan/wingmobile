@@ -114,3 +114,12 @@ A single intended host should own the sound and hardware output. Cloud preset
 sync distributes configuration and samples; it does not stream live sensor
 input between computers. Public PeerJS/TURN availability still affects phones;
 use configured venue services for a dependable show.
+
+
+## Runtime media in version control
+
+The feather photographs and thumbnails in `public/feathers`, the fifty WAV
+loops in `public/music-tests`, and `public/creative-assets/feather-motion.mp4`
+are required runtime assets. The app ignore rules explicitly include them
+despite the parent repository excluding other media. Keep these files in
+Git so a clean checkout passes the asset tests and produces a complete site.

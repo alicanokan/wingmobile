@@ -6,3 +6,10 @@ dist-ssr
 .env
 .env.local
 .vercel
+
+# Runtime media belongs to this app and is required by clean builds and tests.
+# Override the parent repository's blanket media exclusions for these assets.
+!public/feathers/*.png
+!public/feathers/thumbs/*.png
+!public/music-tests/*.wav
+!public/creative-assets/feather-motion.mp4
