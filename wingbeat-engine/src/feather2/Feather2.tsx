@@ -643,18 +643,22 @@ export interface Feather2Props {
   featherId?: string;
   /** Live play contract: per-channel trigger levels and the part/movement each drives. */
   play?: FeatherPlay;
+  /** Measured host audio: shaft, vane, down, markings, colour. Values are 0..1. */
+  stemInput?: { active: boolean; levels: number[] };
   /** A saved studio look to recall (applied whenever its id changes). */
   preset?: FeatherPreset | null;
   /** The host owns the encounter, audio and physical outputs when embedded. */
   runtime?: { engine: WingbeatEngine; audio: AudioEngine };
 }
 
-export default function Feather2({ embedded = false, featherId, play, preset, runtime }: Feather2Props = {}) {
+export default function Feather2({ embedded = false, featherId, play, stemInput, preset, runtime }: Feather2Props = {}) {
   const [source, setSource] = useState<Specimen>(() => FEATHERS.find((f) => !f.procedural)!);
   // The render loop reads these through refs, so a host can change them
   // without rebuilding the scene.
   const playRef = useRef<FeatherPlay | undefined>(play);
   playRef.current = play;
+  const stemInputRef = useRef(stemInput);
+  stemInputRef.current = stemInput;
   const embeddedRef = useRef(embedded);
   embeddedRef.current = embedded;
   const runtimeRef = useRef(runtime);
@@ -1678,9 +1682,15 @@ export default function Feather2({ embedded = false, featherId, play, preset, ru
         photoEcho.position.copy(ghost.position);
       }
       if (usePhoto) { bloomPass.strength *= 0.12; ghost.visible = false; }
-      uniforms.uStemTest.value = musicPlayer.active ? 1 : 0;
+      const externalStems = stemInputRef.current;
+      uniforms.uStemTest.value = externalStems?.active || musicPlayer.active ? 1 : 0;
       uniforms.uStemLevels.value.fill(0);
-      if (musicPlayer.active) musicPlayer.read().forEach((level, i) => { uniforms.uStemLevels.value[musicPlayer.targets[i]] = level; });
+      if (externalStems?.active) {
+        for (let i = 0; i < 5; i++) {
+          const level = externalStems.levels[i];
+          uniforms.uStemLevels.value[i] = Number.isFinite(level) ? Math.max(0, Math.min(1, level)) : 0;
+        }
+      } else if (musicPlayer.active) musicPlayer.read().forEach((level, i) => { uniforms.uStemLevels.value[musicPlayer.targets[i]] = level; });
       composer.render();
       if (++frame % 3 === 0) {
         meter.current?.(f);

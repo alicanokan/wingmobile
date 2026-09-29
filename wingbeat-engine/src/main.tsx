@@ -10,6 +10,7 @@ const Controller = lazy(() => import('./sim/Controller.tsx'));
 const Conductor = lazy(() => import('./sim/Conductor.tsx'));
 const Experience = lazy(() => import('./sim/Experience.tsx'));
 const Feather2 = lazy(() => import('./feather2/Feather2.tsx'));
+const TestFeather = lazy(() => import('./testfeather/TestFeather.tsx'));
 
 // Entry points on one app: the operator console (/), a display-only projection
 // (/feather) for a second screen, a phone camera sender (/cam), a phone
@@ -27,6 +28,9 @@ const ROUTES: Record<string, { label: string; el: () => ReactNode }> = {
   '/controller': { label: 'phone controller', el: () => <Controller /> },
   '/conductor': { label: 'conductor', el: () => <Conductor /> },
   '/experience': { label: 'experience', el: () => <Experience /> },
+  '/test.html': { label: 'feather sound atlas', el: () => <TestFeather /> },
+  '/testfeather.html': { label: 'feather sound atlas', el: () => <TestFeather /> },
+  '/testfeather': { label: 'feather sound atlas', el: () => <TestFeather /> },
   '/feather2.html': { label: 'feather studio', el: () => <Feather2 /> },
   '/feather2': { label: 'feather lab', el: () => <Feather2 /> },
 };

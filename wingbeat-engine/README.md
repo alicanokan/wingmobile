@@ -27,6 +27,7 @@ documentation; it takes effect when committed and pushed.
 | Route | Purpose |
 | --- | --- |
 | `/` | Visitor invitation, Hold / Feel / Listen onboarding, cultural philosophy |
+| `/test.html` | 44-feather sound atlas with five audio layers, local uploads, visual response editing and master BPM |
 | `/experience` | Living feather with Play pads, sound, paired phones, MQTT and lighting |
 | `/?mode=control` | Full installation console, source routing, mixer and network settings |
 | `/?mode=performance` | Start / Hold / Settle / Stop performance controls |
@@ -42,6 +43,22 @@ can accept multiple phones. Both host surfaces merge participants independently:
 one person releasing does not cancel another. The host chooses Play only,
 Play + FX or Everything. Camera images stay on the phone; motion values travel
 through the paired connection.
+
+## Feather sound lab
+
+Open `/test.html` to audition 44 proposed feather/music pairings across seven
+geographies. Every study has five independently analysed layers, with Solo,
+Mute and volume controls. Each layer accepts a local audio file; replacement
+keeps its response settings. Open the arrow to choose a feather part, movement,
+sensitivity, amount and speed. Master BPM sets the selection's tempo, and each
+uploaded clip has an editable source BPM. Tempo changes speed and pitch.
+
+Uploads and edits remain in the current tab until reload. WAV exports four bars
+of the current mix. These are original synthesized studies and artistic pairings,
+not verified bird origins or traditional recordings. `/testfeather.html` remains
+an alias. Export the complete pairing report with
+`node --experimental-strip-types scripts/export-sound-atlas.ts <output-folder>`;
+add `--audio` for twelve listening examples.
 
 ## How the engine works
 

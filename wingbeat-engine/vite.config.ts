@@ -9,6 +9,7 @@ export default defineConfig({
   },
   build: {
     rollupOptions: {
+      input: { main: 'index.html', test: 'test.html', testfeather: 'testfeather.html' },
       output: {
         // Assigned by module path rather than by package name: the name form
         // puts a shared dependency in whichever group claimed it first, which
