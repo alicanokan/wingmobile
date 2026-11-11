@@ -3,7 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Wing Beat — Engine</title>
+    <title>Wing Beat — interactive feather, breath and sound installation</title>
+    <meta name="description" content="Wing Beat is an interactive sound and light installation by Alican Okan. Visitors hold a feather and breathe; the movement of the air becomes music, colour and light." />
+    <link rel="canonical" href="https://wingbeat.art/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Wing Beat" />
+    <meta property="og:url" content="https://wingbeat.art/" />
+    <meta property="og:title" content="Wing Beat — interactive feather, breath and sound installation" />
+    <meta property="og:description" content="Hold a feather and breathe. The movement of the air becomes music, colour and light." />
+    <meta property="og:image" content="https://wingbeat.art/og.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
@@ -17,6 +28,13 @@
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <div style="max-width:640px;margin:15vh auto;padding:0 24px;line-height:1.6">
+        <h1>Wing Beat</h1>
+        <p>Wing Beat is an interactive sound and light installation by Alican Okan. Visitors hold a feather and breathe; sensors read the movement of the air and turn each gesture into music, colour and light.</p>
+        <p>This page needs JavaScript to show the piece.</p>
+      </div>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

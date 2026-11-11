@@ -26,7 +26,7 @@ documentation; it takes effect when committed and pushed.
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Visitor invitation, Hold / Feel / Listen onboarding, cultural philosophy |
+| `/` | Visitor invitation, Hold / Feel / Listen onboarding, cultural philosophy, installation summary and artist credit |
 | `/test.html` | 44-feather sound atlas with five audio layers, local uploads, visual response editing and master BPM |
 | `/experience` | Living feather with Play pads, sound, paired phones, MQTT and lighting |
 | `/?mode=control` | Full installation console, source routing, mixer and network settings |

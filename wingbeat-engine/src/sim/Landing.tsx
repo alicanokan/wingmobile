@@ -97,7 +97,7 @@ export function Landing({ onPick }: { onPick: (m: EntryMode) => void }) {
   const [motion, setMotion] = useState(() => !matchMedia('(prefers-reduced-motion: reduce)').matches);
   useEffect(() => {
     const section = location.hash.slice(1);
-    if (['practice', 'culture', 'enter'].includes(section)) document.getElementById(section)?.scrollIntoView();
+    if (['practice', 'culture', 'installation', 'enter'].includes(section)) document.getElementById(section)?.scrollIntoView();
   }, []);
   useEffect(() => {
     const preference = matchMedia('(prefers-reduced-motion: reduce)');
@@ -113,22 +113,22 @@ export function Landing({ onPick }: { onPick: (m: EntryMode) => void }) {
   return <main className={`wing-home ${motion ? '' : 'wing-motion-paused'}`}>
     <header className="wing-nav">
       <a href="/" className="wing-wordmark"><span aria-hidden="true"><svg width="23" height="28" viewBox="0 0 24 30" fill="none"><path d="M8 24C2 17 8 4 19 2c2 10-1 19-11 22Z" fill="currentColor" opacity=".85" /><path d="M6 28 17 6M10 19l7-3M12 14l-2-4" stroke="#526c54" strokeWidth="1.2" strokeLinecap="round" /></svg></span>Wing Beat</a>
-      <nav aria-label="Main"><a href="#practice">How it feels</a><a href="#culture">The idea</a><a href="/experience">Enter <span aria-hidden="true">↗</span></a></nav>
+      <nav aria-label="Main"><a href="#practice">How it feels</a><a href="#culture">The idea</a><a href="#installation">The installation</a><a href="/experience">Enter <span aria-hidden="true">↗</span></a></nav>
     </header>
 
     <section className="wing-hero" aria-labelledby="wing-title">
       <div className="wing-motion"><video ref={video} muted loop playsInline preload="metadata" poster="/feathers/air-study.png" aria-label="A silver feather moving gently in the air"><source src="/creative-assets/feather-motion.mp4" type="video/mp4" /></video></div>
       <div className="wing-hero-copy">
-        <p className="wing-overline">A PRACTICE OF ATTENTION</p>
+        <p className="wing-overline">AN INTERACTIVE INSTALLATION</p>
         <h1 id="wing-title">Feel the weight<br />of the air.</h1>
-        <p>Hold lightly. Let the air speak.</p>
+        <p>Hold a feather and breathe. The air becomes sound and light.</p>
         <a className="wing-cta" href="#practice">Begin here <span aria-hidden="true">↓</span></a>
       </div>
       <div className="wing-hero-foot"><span>Touch · Air · Sound</span><button aria-pressed={motion} onClick={() => setMotion((value) => !value)}>{motion ? 'Pause motion' : 'Play motion'} <span aria-hidden="true">{motion ? 'Ⅱ' : '▷'}</span></button></div>
     </section>
 
     <section className="wing-practice" id="practice" aria-labelledby="wing-practice-title">
-      <div className="wing-section-head"><p className="wing-overline">YOUR FIRST WING BEAT</p><h2 id="wing-practice-title">Less effort.<br />More feeling.</h2></div>
+      <div className="wing-section-head"><p className="wing-overline">YOUR FIRST WING BEAT</p><h2 id="wing-practice-title">A feather is<br />the instrument.</h2></div>
       <ol className="wing-practice-steps">{([
         ['hold', 'Hold', 'Thumb and index finger. A very light touch.'],
         ['air', 'Feel', 'A gentle breath. Feel the air’s tiny pull.'],
@@ -144,9 +144,26 @@ export function Landing({ onPick }: { onPick: (m: EntryMode) => void }) {
       <a className="wing-text-link" href="/experience">Feel it <span aria-hidden="true">↗</span></a>
     </section>
 
+    <section className="wing-installation" id="installation" aria-labelledby="wing-installation-title">
+      <div>
+        <p className="wing-overline">THE INSTALLATION</p>
+        <h2 id="wing-installation-title">A forest of feathers,<br />played by breath.</h2>
+      </div>
+      <div>
+        <p>Wing Beat is an interactive sound and light installation. Visitors hold a feather and breathe; sensors read the movement of the air and turn each gesture into music, colour and light, shared by everyone in the space.</p>
+        <dl className="wing-facts">
+          <div><dt>Form</dt><dd>Interactive sound and light installation</dd></div>
+          <div><dt>Played with</dt><dd>Feathers, breath and touch</dd></div>
+          <div><dt>Designed for</dt><dd>Forests and indoor spaces</dd></div>
+          <div><dt>Artist</dt><dd><a href="https://www.alicanokan.com" rel="author">Alican Okan <span aria-hidden="true">↗</span></a></dd></div>
+        </dl>
+      </div>
+    </section>
+
     <footer className="wing-footer">
       <div className="wing-footer-line"><a href="/" className="wing-wordmark">Wing Beat</a><span>Hold lightly. Listen closely.</span></div>
       <details className="wing-tools" id="enter"><summary>Studio &amp; installation tools <span aria-hidden="true">＋</span></summary><nav aria-label="Studio and installation">{TOOLS.map((tool) => <a key={tool.label} href={tool.href} onClick={(event) => { if (!tool.mode) return; event.preventDefault(); onPick(tool.mode); }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={tool.icon} /></svg>{tool.label}<span aria-hidden="true">↗</span></a>)}</nav></details>
+      <p className="wing-credit">Wing Beat is an interactive installation by Alican Okan.</p>
     </footer>
   </main>;
 }
