@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { validatePreset, defaultPreset, loadIntoRig, rig, snapshotPreset, DEFAULT_GLOBAL } from '../rig.ts';
-import { normalizePreset, savePreset, recallPreset, listPresets, presetExists, deletePreset, PRESET_VERSION } from '../presets.ts';
+import { normalizePreset, savePreset, recallPreset, listPresets, presetExists, deletePreset, PRESET_VERSION, BUILTIN_PRESETS } from '../presets.ts';
 import { validateRouting } from '../inputs.ts';
 import { validateMixerSnapshot } from '../../engine/mixerSnapshot.ts';
 
@@ -32,7 +32,7 @@ describe('validatePreset', () => {
 describe('preset store v2', () => {
   it('migrates a v1 entry on read', () => {
     localStorage.setItem('wb_presets', JSON.stringify({ old: { ...defaultPreset('02f'), name: 'old', updatedAt: 5 } }));
-    expect(listPresets()).toEqual(['old']);
+    expect(listPresets().filter((n) => !BUILTIN_PRESETS.includes(n))).toEqual(['old']);
     const b = recallPreset('old')!;
     expect(b.v).toBe(PRESET_VERSION);
     expect(b.savedAt).toBe(5);
@@ -76,5 +76,32 @@ describe('validateRouting', () => {
     expect(r.parts.slot_1).toEqual(['sensor_05']);
     expect(r.keyAmount).toBe(1);
     expect(r.deviceThresholds.slice(0, 3)).toEqual([0.5, 0, 1]);
+  });
+});
+
+describe('built-in Yawa preset', () => {
+  const NAME = 'Yawa · 3 stems (camera)';
+  it('is listed first and recalls camera-zoned routing + three bundled stems', () => {
+    expect(listPresets()[0]).toBe(NAME);
+    expect(presetExists(NAME)).toBe(true);
+    const b = recallPreset(NAME)!;
+    expect(b.loopBpm).toBe(96);
+    expect(b.preset.global.bpm).toBe(96);
+    expect(b.routing?.camZones).toBe(true);
+    expect(['slot_1', 'slot_2', 'slot_3'].map((s) => b.routing?.sources[s])).toEqual(['camera', 'camera', 'camera']);
+    expect(b.routing?.parts.slot_2).toEqual(['sensor_02']);
+    expect(b.sensorSamples?.sensor_01?.path).toBe('/presets/yawa/yawa-bd.m4a');
+    expect(b.sensorSamples?.sensor_03?.path).toBe('/presets/yawa/yawa-vox.m4a');
+    expect(b.sensorSamples?.sensor_04).toBeNull();
+  });
+  it('cannot be overwritten or deleted', () => {
+    expect(() => savePreset(NAME)).toThrow();
+    deletePreset(NAME);
+    expect(presetExists(NAME)).toBe(true);
+  });
+  it('camZones survives routing validation and defaults off', () => {
+    expect(validateRouting({}).camZones).toBe(false);
+    expect(validateRouting({ camZones: true }).camZones).toBe(true);
+    expect(validateRouting({ camZones: 'yes' }).camZones).toBe(false);
   });
 });

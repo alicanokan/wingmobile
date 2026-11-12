@@ -14,7 +14,7 @@ import './mobile.css';
 import { WingbeatEngine } from '../engine/WingbeatEngine.ts';
 import type { EncounterPhase, GestureTrace, InputSource } from '../engine/types.ts';
 import { replayGestureTraceRealtime } from '../engine/replay.ts';
-import { AudioEngine } from '../engine/AudioEngine.ts';
+import { AudioEngine, LOOP_NATIVE_BPM } from '../engine/AudioEngine.ts';
 import { SCENES, getScene } from '../engine/scenes.ts';
 import { ledService } from '../led/ledService.ts';
 import { engineLedInputs } from '../led/engineInputs.ts';
@@ -227,7 +227,13 @@ export default function App() {
   const [featherOpen, setFeatherOpen] = useState(false);
 
   // Input routing — source→slot, slot→part(s), slot→key, persisted (see inputs.ts).
-  const [{ sources, parts, keys, keyAmount, keyRelease, deviceThresholds }, setRouting] = useState(() => loadRouting());
+  const [{ sources, parts, keys, keyAmount, keyRelease, deviceThresholds, camZones }, setRouting] = useState(() => loadRouting());
+  const setCamZones = (on: boolean) =>
+    setRouting((r) => {
+      const next = { ...r, camZones: on };
+      saveRouting(next);
+      return next;
+    });
   const setKeyAmount = (v: number) =>
     setRouting((r) => {
       const next = { ...r, keyAmount: v };
@@ -446,15 +452,18 @@ export default function App() {
   // ---- presets v2: what travels with the rig ----
   const presetContext = useCallback((): PresetContext => ({
     scene: engine.scene,
-    routing: { sources, parts, keys, keyAmount, keyRelease, deviceThresholds },
+    routing: { sources, parts, keys, keyAmount, keyRelease, deviceThresholds, camZones },
     mixer: audio.snapshotMixer(),
     sensorSamples: lastAppliedSamples(),
-  }), [engine, audio, sources, parts, keys, keyAmount, keyRelease, deviceThresholds]);
+  }), [engine, audio, sources, parts, keys, keyAmount, keyRelease, deviceThresholds, camZones]);
   const onPresetRecall = useCallback((b: PresetBundle) => {
     if (b.routing) { setRouting(b.routing); saveRouting(b.routing); }
     if (b.mixer) audio.applyMixer(b.mixer);
     if (b.scene) { setFeatherScene(featherRef.current, b.scene); engine.setScene(b.scene); }
     if (b.sensorSamples && Object.keys(b.sensorSamples).length) applySensorSamples(engine, audio, b.sensorSamples);
+    // A preset may say what tempo its stems were authored at, so they play at
+    // their own speed (rate 1) at the preset's bpm. Otherwise the default.
+    audio.setLoopNativeBpm(b.loopBpm ?? LOOP_NATIVE_BPM);
     audio.setBpm(rig.global.bpm);
   }, [engine, audio]);
 
@@ -609,6 +618,11 @@ export default function App() {
     };
     let meterTick = 0;
     let lastT = 0;
+    // Camera zones: the camera-routed slots, in slot order, each own a strip
+    // of the frame (left → right). One slot (or zones off) = the whole frame.
+    const camSlots = SLOTS.filter((s) => sources[s.id] === 'camera').map((s) => s.id);
+    const zoned = camZones && camSlots.length > 1;
+    cam.zoneCount = zoned ? camSlots.length : 1;
     let keyPeak = 0; // live max key pulse, for the keyboard meter
     const driven = new Set<string>(); // parts we currently hold, to release on unpatch
     const drivenSources = new Map<string, InputSource>();
@@ -633,7 +647,7 @@ export default function App() {
         const src = sources[slot.id];
         let v = 0;
         if (src === 'mic') v = mic.active ? micLvl : 0;
-        else if (src === 'camera') v = cam.active ? camLvl : 0;
+        else if (src === 'camera') v = !cam.active ? 0 : zoned ? (camReading?.zones[camSlots.indexOf(slot.id)] ?? 0) : camLvl;
         else if (isDeviceKey(src)) {
           const di = deviceIndex(src);
           const raw = deviceMotion.current[di] ?? 0;
@@ -705,7 +719,7 @@ export default function App() {
         sim.setPresence(id, false, source);
       });
     };
-  }, [transport, sources, parts, mic, cam]);
+  }, [transport, sources, parts, mic, cam, camZones]);
 
   // Broadcast live state to any /feather display window (see sync.ts). Cheap to
   // run even with no window open (postMessage to nobody is a no-op).
@@ -1159,7 +1173,7 @@ export default function App() {
           {showPair && (
             <DevicesPanel phonePerms={phonePerms} onPhonePerms={setPhonePerms} devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} thresholds={deviceThresholds} onThresholdChange={setDeviceThreshold} />
           )}
-          {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} compact={entryMode === 'mobile'} />}
+          {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} compact={entryMode === 'mobile'} zones={camZones} onZones={setCamZones} />}
         </div>
 
         {!mobileMenu && !showPair && !camOn && mobileShowCollection && (
@@ -1411,7 +1425,7 @@ export default function App() {
       )}
       {showScene && <ScenePanel snapshot={snapshot} engine={engine} audio={audio} onClose={() => setShowScene(false)} />}
       {micOn && <MicPanel mic={mic} onClose={() => setMicOn(false)} />}
-      {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} />}
+      {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} zones={camZones} onZones={setCamZones} />}
       {showRig && <RigPanel snapshot={snapshot} audio={audio} onClose={() => setShowRig(false)} presetContext={presetContext} onPresetRecall={onPresetRecall} />}
       {audioAlert}
       {showSettings && (

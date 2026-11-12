@@ -29,7 +29,7 @@ import {
   type SensorRig,
   type LayerDef,
 } from './rig.ts';
-import { listPresets, savePreset, recallPreset, deletePreset, exportPreset, importPreset, saveLast, presetExists, type PresetBundle, type PresetContext } from './presets.ts';
+import { listPresets, isBuiltinPreset, savePreset, recallPreset, deletePreset, exportPreset, importPreset, saveLast, presetExists, type PresetBundle, type PresetContext } from './presets.ts';
 import type { AudioEngine } from '../engine/AudioEngine.ts';
 import type { EngineSnapshot } from './useEngine.ts';
 
@@ -92,13 +92,13 @@ export function RigPanel({ snapshot, audio, onClose, presetContext, onPresetReca
       <div className="wb-set-row">
         <select value="" onChange={(e) => { const b = e.target.value ? recallPreset(e.target.value) : null; if (b) { setPresetName(b.name); saveLast(feather); relayout(); onPresetRecall?.(b); } }}>
           <option value="">recall profile…</option>
-          {presets.map((p) => <option key={p} value={p}>{p}</option>)}
+          {presets.map((p) => <option key={p} value={p}>{isBuiltinPreset(p) ? `★ ${p}` : p}</option>)}
         </select>
       </div>
       <div className="wb-set-row">
         <input className="wb-input" style={{ width: 110 }} value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="profile name" />
-        <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => { const n = presetName.trim() || 'preset'; if (presetExists(n) && !confirm(`Overwrite preset "${n}"?`)) return; savePreset(n, presetContext?.()); saveLast(feather); refresh(); }}>save</button>
-        <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => { if (!presetExists(presetName)) return; if (!confirm(`Delete preset "${presetName}"?`)) return; deletePreset(presetName); refresh(); }}>del</button>
+        <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => { const n = presetName.trim() || 'preset'; if (isBuiltinPreset(n)) { alert(`"${n}" is built in — type a new name to save your own version.`); return; } if (presetExists(n) && !confirm(`Overwrite preset "${n}"?`)) return; savePreset(n, presetContext?.()); saveLast(feather); refresh(); }}>save</button>
+        <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => { if (!presetExists(presetName) || isBuiltinPreset(presetName)) return; if (!confirm(`Delete preset "${presetName}"?`)) return; deletePreset(presetName); refresh(); }}>del</button>
       </div>
       <div className="wb-set-row">
         <button className="wb-btn" style={{ padding: '4px 8px' }} onClick={() => exportPreset(presetName || 'preset', presetContext?.())}>export json</button>

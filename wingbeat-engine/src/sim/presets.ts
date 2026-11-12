@@ -35,6 +35,9 @@ export interface PresetBundle {
   mixer?: MixerSnapshot;
   /** sensor id → library sample (null = no loop). Audio travels with the preset. */
   sensorSamples?: Record<string, SampleRef | null>;
+  /** Tempo the bundled stems were authored at — loops play at rate 1 when the
+   *  rig bpm equals this. Absent = the engine default (LOOP_NATIVE_BPM). */
+  loopBpm?: number;
 }
 
 /** What the caller knows and the rig doesn't — supplied on save. */
@@ -44,6 +47,58 @@ const GLOBAL_KEY = 'wb_presets'; // portable named presets (any feather)
 const lastKey = (feather: string) => `wb_last_${feather}`;
 
 type Store = Record<string, PresetBundle>;
+
+// ---- built-in presets (ship with the site, read-only) ----------------------
+//
+// "Yawa": three stems of one song — drums/bass, guitar, vocal — on sensors
+// 1–3, all three fed by the camera with the frame split into three strips.
+// Move a feather on the left and the drums come in, in the middle the guitar,
+// on the right the voice; sweep across and the whole song plays. The stems
+// run continuously in sync and each sensor only opens its own fader, so the
+// layers always land on the same beat however they are triggered.
+// Samples live in /public/presets/yawa (sampleUrl serves '/…' paths locally).
+const YAWA_BPM = 96;
+const yawaStem = (id: string, label: string, size: number): SampleRef => ({
+  id: `builtin:yawa-${id}`,
+  name: `Yawa · ${label}`,
+  path: `/presets/yawa/yawa-${id}.m4a`,
+  size,
+});
+const BUILTIN: Record<string, () => Omit<PresetBundle, 'preset'>> = {
+  'Yawa · 3 stems (camera)': () => ({
+    v: PRESET_VERSION,
+    name: 'Yawa · 3 stems (camera)',
+    savedAt: 0,
+    loopBpm: YAWA_BPM,
+    routing: validateRouting({
+      sources: { slot_1: 'camera', slot_2: 'camera', slot_3: 'camera', slot_4: 'off', slot_5: 'off' },
+      parts: { slot_1: ['sensor_01'], slot_2: ['sensor_02'], slot_3: ['sensor_03'], slot_4: [], slot_5: [] },
+      camZones: true,
+    }),
+    sensorSamples: {
+      sensor_01: yawaStem('bd', 'drums & bass', 2416117),
+      sensor_02: yawaStem('gtr', 'guitar', 2413953),
+      sensor_03: yawaStem('vox', 'vocal', 2401475),
+      sensor_04: null,
+      sensor_05: null,
+    },
+  }),
+};
+/** Names of the presets that ship with the site. */
+export const BUILTIN_PRESETS = Object.keys(BUILTIN);
+export function isBuiltinPreset(name: string): boolean {
+  return name in BUILTIN;
+}
+/** A built-in adopts the CURRENT look (rig) and only sets its tempo — it is
+ *  about sound + routing, not about how the feather is drawn. */
+function builtinBundle(name: string): PresetBundle | null {
+  const make = BUILTIN[name];
+  if (!make) return null;
+  const b = make();
+  const preset = snapshotPreset(name);
+  if (b.loopBpm) preset.global.bpm = b.loopBpm;
+  return { ...b, preset: validatePreset(preset) };
+}
 
 function validateSamples(raw: unknown): Record<string, SampleRef | null> | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
@@ -74,6 +129,7 @@ export function normalizePreset(raw: unknown, fallbackName = 'preset'): PresetBu
       ...(r.routing ? { routing: validateRouting(r.routing) } : {}),
       ...(mixer ? { mixer } : {}),
       ...(r.sensorSamples ? { sensorSamples: validateSamples(r.sensorSamples) } : {}),
+      ...(typeof r.loopBpm === 'number' && Number.isFinite(r.loopBpm) && r.loopBpm >= 20 && r.loopBpm <= 400 ? { loopBpm: r.loopBpm } : {}),
     };
   }
   // v1: the bare rig
@@ -101,15 +157,16 @@ function writeGlobal(store: Store) {
 }
 
 export function listPresets(): string[] {
-  return Object.keys(readGlobal()).sort();
+  const saved = Object.keys(readGlobal()).filter((n) => !isBuiltinPreset(n)).sort();
+  return [...BUILTIN_PRESETS, ...saved];
 }
 
 export function presetExists(name: string): boolean {
-  return name in readGlobal();
+  return isBuiltinPreset(name) || name in readGlobal();
 }
 
 export function getPreset(name: string): PresetBundle | null {
-  return readGlobal()[name] ?? null;
+  return builtinBundle(name) ?? readGlobal()[name] ?? null;
 }
 
 /** Bundle the current rig + whatever context the caller supplies. */
@@ -129,6 +186,7 @@ export function bundleCurrent(name: string, ctx: PresetContext = {}): PresetBund
 /** Save the current rig (+ context) as a portable named preset. Overwrites —
  *  callers confirm first (presetExists). */
 export function savePreset(name: string, ctx: PresetContext = {}): PresetBundle {
+  if (isBuiltinPreset(name)) throw new Error(`"${name}" is a built-in preset — save under another name.`);
   const store = readGlobal();
   const b = bundleCurrent(name, ctx);
   store[name] = b;
@@ -140,7 +198,7 @@ export function savePreset(name: string, ctx: PresetContext = {}): PresetBundle 
  *  image). Returns the bundle so the caller can apply scene / routing / mixer
  *  / samples — the rig part is applied here. */
 export function recallPreset(name: string): PresetBundle | null {
-  const b = readGlobal()[name];
+  const b = getPreset(name);
   if (!b) return null;
   const cur = rig.feather;
   loadIntoRig(b.preset);
@@ -149,6 +207,7 @@ export function recallPreset(name: string): PresetBundle | null {
 }
 
 export function deletePreset(name: string): void {
+  if (isBuiltinPreset(name)) return;
   const store = readGlobal();
   delete store[name];
   writeGlobal(store);

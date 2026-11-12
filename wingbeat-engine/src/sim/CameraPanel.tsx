@@ -16,12 +16,16 @@ interface Props {
   onClose: () => void;
   onDisable: () => void;
   compact?: boolean;
+  /** Split the frame into one strip per camera-routed slot. */
+  zones?: boolean;
+  onZones?: (on: boolean) => void;
 }
 
-export function CameraPanel({ cam, onClose, onDisable, compact }: Props) {
+export function CameraPanel({ cam, onClose, onDisable, compact, zones, onZones }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [hud, setHud] = useState(0);
+  const [zoneHud, setZoneHud] = useState<number[]>([]);
   const [contrast, setContrast] = useState(cam.contrast);
   const [threshold, setThreshold] = useState(cam.threshold);
   const [sensitivity, setSensitivity] = useState(cam.sensitivity);
@@ -39,7 +43,10 @@ export function CameraPanel({ cam, onClose, onDisable, compact }: Props) {
     canvasRef.current!.width = cam.size.w;
     canvasRef.current!.height = cam.size.h;
     cam.attachPreview(canvasRef.current);
-    const id = setInterval(() => setHud(cam.lastMotion), 100);
+    const id = setInterval(() => {
+      setHud(cam.lastMotion);
+      setZoneHud(cam.zoneCount > 1 ? cam.lastZones : []);
+    }, 100);
     return () => {
       clearInterval(id);
       cam.attachPreview(null);
@@ -84,6 +91,22 @@ export function CameraPanel({ cam, onClose, onDisable, compact }: Props) {
         </div>
         <span className="wb-motion-val">{hud.toFixed(2)}</span>
       </div>
+
+      {onZones && (
+        <label className="wb-settings-note" style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', marginTop: 8 }} title="Each camera-routed sensor hears only its own strip of the frame, left to right in sensor order">
+          <input type="checkbox" checked={!!zones} onChange={(e) => onZones(e.target.checked)} />
+          Split into zones — one strip per camera sensor
+        </label>
+      )}
+      {zoneHud.map((z, i) => (
+        <div className="wb-meter-row" key={i}>
+          <span className="wb-mod-label">zone {i + 1}</span>
+          <div className="wb-meter">
+            <div className="wb-meter-fill" style={{ width: `${Math.round(z * 100)}%` }} />
+          </div>
+          <span className="wb-motion-val">{z.toFixed(2)}</span>
+        </div>
+      ))}
 
       <div className="wb-settings-section">Detection</div>
       <div className="wb-knob-row">

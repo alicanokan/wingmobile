@@ -94,6 +94,10 @@ export interface RoutingState {
   keyRelease: number;
   /** Per-device (dev1..dev5) noise floor 0..1 — incoming level below this reads as 0. */
   deviceThresholds: number[];
+  /** Split the camera frame into side-by-side zones, one per camera-routed
+   *  slot (in slot order), so each slot hears only movement in its own strip.
+   *  Off = every camera slot gets the whole frame's motion. */
+  camZones: boolean;
 }
 
 const VALID_PARTS = new Set(PARTS.map((p) => p.id));
@@ -110,6 +114,7 @@ export function validateRouting(raw: unknown): RoutingState {
     keyAmount: 1,
     keyRelease: 0.25,
     deviceThresholds: Array(DEVICE_COUNT).fill(0),
+    camZones: false,
   };
   const saved = (raw && typeof raw === 'object' ? raw : {}) as Partial<RoutingState>;
   for (const s of SLOTS) {
@@ -125,6 +130,7 @@ export function validateRouting(raw: unknown): RoutingState {
   if (Array.isArray(saved.deviceThresholds)) {
     for (let i = 0; i < DEVICE_COUNT; i++) base.deviceThresholds[i] = fin(saved.deviceThresholds[i], 0, 0, 1);
   }
+  base.camZones = saved.camZones === true;
   return base;
 }
 

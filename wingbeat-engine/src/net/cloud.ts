@@ -144,6 +144,8 @@ export async function deleteSample(s: CloudSample): Promise<void> {
 
 export function sampleUrl(pathOrRef: string | SampleRef): string {
   const path = typeof pathOrRef === 'string' ? pathOrRef : pathOrRef.path;
+  // Samples bundled with the site (built-in presets) are served from /public.
+  if (path.startsWith('/')) return path;
   return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
 }
 

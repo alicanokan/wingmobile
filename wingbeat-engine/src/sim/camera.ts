@@ -33,6 +33,8 @@ export interface CameraReading {
   y: number;
   /** True once motion crosses the presence threshold. */
   present: boolean;
+  /** Enveloped motion per vertical strip, left → right (length = zoneCount). */
+  zones: number[];
 }
 
 // Processing resolution — small is fine (and fast); motion is a coarse signal.
@@ -73,6 +75,22 @@ export class CameraSource {
   private rel = 0; // post-release (enveloped) motion
   private lastT = 0;
 
+  // Zones: the frame split into `zoneCount` equal vertical strips, each with
+  // its own motion + envelope, so one camera can play several sensors by
+  // WHERE the movement is (a feather on the left plays slot A, centre B …).
+  private zoneN = 1;
+  private zoneEma: number[] = [0];
+  private zoneRel: number[] = [0];
+  /** Number of side-by-side zones (1..8). Resets the zone envelopes on change. */
+  get zoneCount(): number { return this.zoneN; }
+  set zoneCount(n: number) {
+    const k = Math.max(1, Math.min(8, Math.round(Number.isFinite(n) ? n : 1)));
+    if (k === this.zoneN) return;
+    this.zoneN = k;
+    this.zoneEma = Array(k).fill(0);
+    this.zoneRel = Array(k).fill(0);
+  }
+
   async start(): Promise<void> {
     if (this.stream) return;
     this.stream = await navigator.mediaDevices.getUserMedia({
@@ -102,7 +120,7 @@ export class CameraSource {
 
   /** Read one frame. Call once per animation frame. */
   read(): CameraReading {
-    const still: CameraReading = { motion: this.ema, x: this.emaX, y: this.emaY, present: false };
+    const still: CameraReading = { motion: this.ema, x: this.emaX, y: this.emaY, present: false, zones: this.zoneRel.slice() };
     if (!this.video || !this.wctx || this.video.readyState < 2) return still;
 
     // Mirror horizontally so moving right on screen reads as moving right.
@@ -116,6 +134,8 @@ export class CameraSource {
     const maskPx = this.mask?.data;
 
     let changed = 0;
+    const zn = this.zoneN;
+    const zoneChanged = new Array<number>(zn).fill(0);
     let sumX = 0;
     let sumY = 0;
     const c = this.contrast;
@@ -134,6 +154,7 @@ export class CameraSource {
       const hot = !firstFrame && diff > thr;
       if (hot) {
         changed++;
+        zoneChanged[Math.min(zn - 1, (((i % PW) * zn) / PW) | 0)]++;
         sumX += i % PW;
         sumY += (i / PW) | 0;
       }
@@ -150,6 +171,11 @@ export class CameraSource {
 
     if (this.preview && this.mask) {
       this.preview.putImageData(this.mask, 0, 0);
+      if (zn > 1) {
+        // zone dividers, so the operator can see where each strip begins
+        this.preview.fillStyle = 'rgba(120, 200, 255, 0.7)';
+        for (let z = 1; z < zn; z++) this.preview.fillRect(Math.round((z * PW) / zn), 0, 1, PH);
+      }
     }
 
     // Raw fraction of the frame that moved → scaled motion energy.
@@ -179,7 +205,18 @@ export class CameraSource {
       this.rel = m + (this.rel - m) * Math.exp(-dt / tau);
     }
 
+    // Per-zone: same scaling (fraction of THAT strip that moved), smoothing
+    // and envelope as the whole-frame value.
+    const zTau = Math.max(0.02, this.releaseTime);
+    for (let z = 0; z < zn; z++) {
+      const zm = Math.min(1, (zoneChanged[z] / (N / zn)) * this.sensitivity);
+      this.zoneEma[z] = Math.min(1, 0.45 * zm + 0.55 * this.zoneEma[z]);
+      const e = this.zoneEma[z];
+      this.zoneRel[z] = e >= this.zoneRel[z] ? e : e + (this.zoneRel[z] - e) * Math.exp(-dt / zTau);
+    }
+
     return {
+      zones: this.zoneRel.slice(),
       motion: this.rel,
       x: this.emaX,
       y: this.emaY,
@@ -190,6 +227,10 @@ export class CameraSource {
   /** Last enveloped motion value, for cheap display without advancing a frame. */
   get lastMotion(): number {
     return this.rel;
+  }
+  /** Last per-zone enveloped motion, for display. */
+  get lastZones(): number[] {
+    return this.zoneRel.slice();
   }
   /** Last horizontal centre, for display. */
   get lastX(): number {
@@ -210,6 +251,8 @@ export class CameraSource {
     this.emaX = this.emaY = 0.5;
     this.rel = 0;
     this.lastT = 0;
+    this.zoneEma = Array(this.zoneN).fill(0);
+    this.zoneRel = Array(this.zoneN).fill(0);
   }
 
   /** Pixel dimensions of the processing buffer (for sizing a preview canvas). */
