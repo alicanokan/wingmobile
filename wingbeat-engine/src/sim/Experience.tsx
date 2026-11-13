@@ -45,6 +45,10 @@ import { loadFeatherPresets, onFeatherPresetsChange, type FeatherPreset } from '
 import { useConductorSync, applyConductorConfig } from '../net/liveSync.ts';
 import { listCloudPresets, type CloudPreset } from '../net/cloud.ts';
 import { DEVICE_COUNT } from './inputs.ts';
+import { CameraSource } from './camera.ts';
+import { BUILTIN_PRESETS, getPreset } from './presets.ts';
+import { applySensorSamples } from '../net/liveSync.ts';
+import { LOOP_NATIVE_BPM } from '../engine/AudioEngine.ts';
 
 // The studio renderer pulls three.js and the anatomy engine; load it only
 // when the living feather is on screen.
@@ -227,6 +231,11 @@ export default function Experience() {
 
   // Conductor live pushes land here exactly like on the console + displays.
   useConductorSync({ engine, audio, onFeather: chooseFeather });
+  // Same debug handles as the console (window.wb / window.wbAudio).
+  useEffect(() => {
+    (window as unknown as { wb: WingbeatEngine; wbAudio: AudioEngine }).wb = engine;
+    (window as unknown as { wbAudio: AudioEngine }).wbAudio = audio;
+  }, [engine, audio]);
 
   // Held wind makes that sensor's loop audible (same rule as the console).
   useEffect(() => {
@@ -289,6 +298,13 @@ export default function Experience() {
   };
   // Key / puff air per part (see the keyboard section below).
   const keyAir = useRef<number[]>(new Array(SLOT_PART.length).fill(0));
+  // Local webcam (built-in presets): the frame splits into one strip per
+  // driven part, left → right, so a feather moving in a strip plays that
+  // part. camParts = part indices in strip order; empty = camera off.
+  const cam = useMemo(() => new CameraSource(), []);
+  const camParts = useRef<number[]>([]);
+  const camAir = useRef<number[]>(new Array(SLOT_PART.length).fill(0));
+
   const puff = (i: number, amount: number) => {
     const sens = rig.sensors[SLOT_PART[i]]?.sensitivity ?? 1;
     keyAir.current[i] = Math.min(1, keyAir.current[i] + amount * Math.min(1.5, sens));
@@ -495,7 +511,14 @@ export default function Experience() {
       const frames = dt * 60;
       // a pad whose phone vanished mid-hold goes stale here; the bus follows
       if (fxApplied.current.on) applyFx(arb.fxState(t));
+      camAir.current.fill(0);
+      if (cam.active && camParts.current.length) {
+        const zones = cam.read().zones;
+        // zoned: strip z → its part; unzoned: every part hears the whole frame
+        camParts.current.forEach((part, z) => (camAir.current[part] = zones[cam.zoneCount > 1 ? z : 0] ?? 0));
+      }
       for (let i = 0; i < SLOT_PART.length; i++) {
+
         const id = SLOT_PART[i];
         const sens = rig.sensors[id]?.sensitivity ?? 1;
         // key air leaks out at this part's Release, exactly like a pulse
@@ -505,7 +528,7 @@ export default function Experience() {
         }
         // phone motion, key air and the test switch all drive the part — loudest wins
         const hands = (motion.current[i] = arb.level(i, t));
-        const v = Math.min(1, Math.max(hands * sens, keyAir.current[i], testHold.current[i] ? TEST_HOLD_LEVEL * sens : 0));
+        const v = Math.min(1, Math.max(hands * sens, camAir.current[i] * sens, keyAir.current[i], testHold.current[i] ? TEST_HOLD_LEVEL * sens : 0));
         // Presence goes to the engine on the EDGE only: every call runs a full
         // ingest + encounter publish, and the held wind (re-emitted by the
         // transport at 20 Hz) already keeps the node fresh.
@@ -557,6 +580,41 @@ export default function Experience() {
   const pickPreset = (p: CloudPreset) => {
     applyConductorConfig(engine, audio, p.config, chooseFeather);
     setActivePreset(p.id);
+  };
+
+  // ---- built-in presets (ship with the site: stems + camera zones) --------
+  const [builtin, setBuiltin] = useState('');
+  const [camState, setCamState] = useState<'off' | 'starting' | 'on' | 'blocked'>('off');
+  const stopCam = () => {
+    camParts.current = [];
+    cam.stop();
+    setCamState('off');
+  };
+  useEffect(() => () => cam.stop(), [cam]);
+  const pickBuiltin = (name: string) => {
+    const b = getPreset(name);
+    if (!b) return;
+    setBuiltin(name);
+    if (b.drone === false) audio.setLayerMute('bed', true);
+    audio.setLoopNativeBpm(b.loopBpm ?? LOOP_NATIVE_BPM);
+    if (b.loopBpm) chooseBpm(b.loopBpm);
+    applySensorSamples(engine, audio, b.sensorSamples);
+    if (!audio.ready) void startAudio(); // the tap that picked it unlocks sound
+    // the camera drives whichever parts the preset routes it to, in slot order
+    const r = b.routing;
+    const parts = r
+      ? Object.keys(r.sources)
+          .sort()
+          .filter((slot) => r.sources[slot] === 'camera')
+          .flatMap((slot) => r.parts[slot] ?? [])
+          .map((id) => SLOT_PART.indexOf(id))
+          .filter((i) => i >= 0)
+      : [];
+    if (!parts.length) return stopCam();
+    camParts.current = parts;
+    cam.zoneCount = r?.camZones ? parts.length : 1;
+    setCamState('starting');
+    cam.start().then(() => setCamState('on')).catch(() => { camParts.current = []; setCamState('blocked'); });
   };
 
   // ---- feather looks saved in the studio (/feather2, same device) ---------
@@ -688,6 +746,25 @@ export default function Experience() {
               );
             })}
           </div>
+
+          <h3 className="xp-subhead">
+            Built in <em>songs played by moving a feather in front of the camera</em>
+          </h3>
+          <div className="xp-presets">
+            {BUILTIN_PRESETS.map((name) => (
+              <button key={name} className={`xp-preset ${builtin === name ? 'active' : ''}`} onClick={() => pickBuiltin(name)} title="drums & bass on the left, guitar in the middle, voice on the right">
+                <b>{name}</b>
+                <span>camera · left / centre / right</span>
+              </button>
+            ))}
+          </div>
+          {camState !== 'off' && (
+            <div className="xp-note">
+              {camState === 'starting' && 'starting the camera…'}
+              {camState === 'blocked' && 'camera blocked — allow camera access for this site and pick the preset again'}
+              {camState === 'on' && <>camera on — move a feather on the left, middle or right <button className="xp-mini" onClick={stopCam}>stop camera</button></>}
+            </div>
+          )}
 
           <h3 className="xp-subhead">
             Feather looks <em>saved in the studio</em>

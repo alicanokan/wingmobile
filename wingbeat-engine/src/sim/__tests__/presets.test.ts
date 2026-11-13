@@ -86,6 +86,7 @@ describe('built-in Yawa preset', () => {
     expect(presetExists(NAME)).toBe(true);
     const b = recallPreset(NAME)!;
     expect(b.loopBpm).toBe(96);
+    expect(b.drone).toBe(false); // stems only — no sine drone underneath
     expect(b.preset.global.bpm).toBe(96);
     expect(b.routing?.camZones).toBe(true);
     expect(['slot_1', 'slot_2', 'slot_3'].map((s) => b.routing?.sources[s])).toEqual(['camera', 'camera', 'camera']);

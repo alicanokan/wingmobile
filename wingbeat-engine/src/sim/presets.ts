@@ -38,6 +38,9 @@ export interface PresetBundle {
   /** Tempo the bundled stems were authored at — loops play at rate 1 when the
    *  rig bpm equals this. Absent = the engine default (LOOP_NATIVE_BPM). */
   loopBpm?: number;
+  /** false = switch the Drone layer (a held sine pad) off — for presets whose
+   *  sound is entirely their stems. Absent = leave the drone as it is. */
+  drone?: boolean;
 }
 
 /** What the caller knows and the rig doesn't — supplied on save. */
@@ -70,6 +73,7 @@ const BUILTIN: Record<string, () => Omit<PresetBundle, 'preset'>> = {
     name: 'Yawa · 3 stems (camera)',
     savedAt: 0,
     loopBpm: YAWA_BPM,
+    drone: false, // only the song — no sine pad underneath it
     routing: validateRouting({
       sources: { slot_1: 'camera', slot_2: 'camera', slot_3: 'camera', slot_4: 'off', slot_5: 'off' },
       parts: { slot_1: ['sensor_01'], slot_2: ['sensor_02'], slot_3: ['sensor_03'], slot_4: [], slot_5: [] },
@@ -129,6 +133,7 @@ export function normalizePreset(raw: unknown, fallbackName = 'preset'): PresetBu
       ...(r.routing ? { routing: validateRouting(r.routing) } : {}),
       ...(mixer ? { mixer } : {}),
       ...(r.sensorSamples ? { sensorSamples: validateSamples(r.sensorSamples) } : {}),
+      ...(typeof r.drone === 'boolean' ? { drone: r.drone } : {}),
       ...(typeof r.loopBpm === 'number' && Number.isFinite(r.loopBpm) && r.loopBpm >= 20 && r.loopBpm <= 400 ? { loopBpm: r.loopBpm } : {}),
     };
   }

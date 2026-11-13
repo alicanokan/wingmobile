@@ -464,6 +464,7 @@ export default function App() {
     // A preset may say what tempo its stems were authored at, so they play at
     // their own speed (rate 1) at the preset's bpm. Otherwise the default.
     audio.setLoopNativeBpm(b.loopBpm ?? LOOP_NATIVE_BPM);
+    if (b.drone === false) audio.setLayerMute('bed', true);
     audio.setBpm(rig.global.bpm);
   }, [engine, audio]);
 
