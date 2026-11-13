@@ -34,6 +34,7 @@ import { engineLedInputs } from '../led/engineInputs.ts';
 import { LedPanel } from './LedPanel.tsx';
 import { Projection } from './Projection.tsx';
 import { FEATHERS, DEFAULT_FEATHER } from './feathers.ts';
+import { DATASET_SOURCES } from './datasetFeathers.ts';
 import { SENSOR_CHANNELS } from './channels.ts';
 import { rig, onRigChange } from './rig.ts';
 import { startHost, controlAllowed, PHONE_PERMS, type ChannelAd, type Control, type HostHandle, type HostMsg, type LinkStatus, type PhonePerms } from '../net/link.ts';
@@ -680,8 +681,8 @@ export default function Experience() {
           </h2>
           <div className="xp-feathers">
             {FEATHERS.flatMap((f, i) => [
-              ...(f.dataset && !FEATHERS[i - 1]?.dataset
-                ? [<div key="dataset-group" className="xp-feathers-group">From public feather datasets <small>non-commercial use · credits on the home page</small></div>]
+              ...(f.dataset && FEATHERS[i - 1]?.dataset !== f.dataset
+                ? [<div key={`group-${f.dataset}`} className="xp-feathers-group">{DATASET_SOURCES[f.dataset].name} <small>{DATASET_SOURCES[f.dataset].usage.toLowerCase()} · credits on the home page</small></div>]
                 : []),
               <button
                 key={f.id}

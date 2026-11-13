@@ -1,7 +1,7 @@
 # Dataset feathers: credits and licences
 
 The images in this folder (and their thumbnails in `../thumbs/dataset/`) are not part of Wing Beat's own feather collection.
-They come from two public datasets and are used **for non-commercial purposes only**, as both licences require.
+They come from three public sources. FeathersV1 and the Kaggle Feather Dataset are used **for non-commercial purposes only**, as their licences require; the USFWS Feather Atlas is free to use.
 
 What we changed: each feather was cut out of its photograph (background removed), turned upright if needed, cropped, resized to 900 px tall and saved as PNG with transparency on black. A 150 px thumbnail was made from each. No other edits.
 
@@ -128,3 +128,33 @@ Specimens were collected by Mirek Lasota; species names were read from the handw
 | scarlet-chested-parrot.png | Scarlet-chested parrot (*Neophema splendida*) | Łąkówka wspaniała | `processed-69D87813-78AD-4497-A7D2-587C105E0BB5.jpeg` |
 | black-woodpecker.png | Black woodpecker (*Dryocopus martius*) | Dzięcioł czarny | `processed-49E3208A-DBCD-4B7C-97C2-9B3FFCEC29D8.jpeg` |
 | eurasian-curlew.png | Eurasian curlew (*Numenius arquata*) | Kulik wielki | `processed-B1AB31D5-2067-4CE3-9A2F-0C3A59A57561.jpeg` |
+
+## 3. The Feather Atlas (U.S. Fish & Wildlife Service)
+
+Credit: **The Feather Atlas, U.S. Fish & Wildlife Service Forensics Laboratory.** https://www.fws.gov/lab/featheratlas/
+Terms (from the Atlas FAQ): "All images and data on the website are freely available to the public; no special permission is required for their use." The scans are works of a U.S. federal agency.
+
+All feathers come from salvaged dead birds held in the Forensics Laboratory's curated collection. Each Atlas scan shows a full set (right wing or right half of the tail, outermost feather on the left); we cut one feather out of each scan and removed the measurement grid.
+
+| File | Species | Feather | Original scan (`images/feathers/…`) | Position in scan (from left) |
+|---|---|---|---|---|
+| american-kestrel.png | American kestrel (*Falco sparverius*) | tail | `AMKE_tail_male.jpg` | 3 |
+| bald-eagle.png | Bald eagle (*Haliaeetus leucocephalus*) | tail | `BAEA_tail_adult.jpg` | 4 |
+| barred-owl.png | Barred owl (*Strix varia*) | tail | `BDOW_tail_adult.jpg` | 3 |
+| blue-jay.png | Blue jay (*Cyanocitta cristata*) | tail | `BLJA_tail_adult.jpg` | 5 |
+| cedar-waxwing.png | Cedar waxwing (*Bombycilla cedrorum*) | tail | `CEDW_tail_adult.jpg` | 3 |
+| common-raven.png | Common raven (*Corvus corax*) | tail | `CORA_tail_male_new.jpg` | 4 |
+| eastern-bluebird.png | Eastern bluebird (*Sialia sialis*) | tail | `EABL_tail_male.jpg` | 3 |
+| great-horned-owl.png | Great horned owl (*Bubo virginianus*) | primary | `GHOW_primary.jpg` | 3 |
+| golden-eagle.png | Golden eagle (*Aquila chrysaetos*) | tail | `GOEA_tail_gwenie.jpg` | 2 |
+| monk-parakeet.png | Monk parakeet (*Myiopsitta monachus*) | tail | `MOPA_tail_male.jpg` | 6 |
+| northern-harrier.png | Northern harrier (*Circus hudsonius*) | tail | `NOHA_tail_male.jpg` | 2 |
+| peregrine-falcon.png | Peregrine falcon (*Falco peregrinus*) | tail | `PEFA_tail_adult.jpg` | 5 |
+| roseate-spoonbill.png | Roseate spoonbill (*Platalea ajaja*) | tail | `ROSP_tail_male.jpg` | 2 |
+| red-shafted-flicker.png | Northern flicker (red-shafted) (*Colaptes auratus*) | tail | `RSFL_tail_adult_ventral.jpg` | 3 |
+| red-tailed-hawk.png | Red-tailed hawk (*Buteo jamaicensis*) | tail | `RTHA_tail_adult.jpg` | 5 |
+| snowy-owl.png | Snowy owl (*Bubo scandiacus*) | primary | `SNOW_primary_adult.jpg` | 3 |
+| stellers-jay.png | Steller's jay (*Cyanocitta stelleri*) | tail | `STJA_tail_female.jpg` | 2 |
+| wild-turkey.png | Wild turkey (*Meleagris gallopavo*) | tail | `WITU_tail_fmle.jpg` | 5 |
+| wood-duck.png | Wood duck (*Aix sponsa*) | tail | `WODU_tail_male.jpg` | 6 |
+| black-billed-magpie.png | Black-billed magpie (*Pica hudsonia*) | tail | `BBMA_tail_adult.jpg` | 6 |

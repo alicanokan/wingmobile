@@ -3,11 +3,12 @@
 // in the same format as the built-in collection (900 px tall + 150 px thumbnail).
 // Regenerate with scripts/feather-datasets/ — then update this list to match.
 //
-// Both sources are licensed for NON-COMMERCIAL use only; keep the credits.
+// FeathersV1 and the Kaggle set are licensed for NON-COMMERCIAL use only; the
+// Feather Atlas (USFWS) is free to use. Keep the credits for all three.
 
 import type { FeatherItem } from './feathers.ts';
 
-export type DatasetSourceId = 'feathersv1' | 'kaggle-lasota';
+export type DatasetSourceId = 'feathersv1' | 'kaggle-lasota' | 'feather-atlas';
 
 export interface DatasetSource {
   id: DatasetSourceId;
@@ -15,6 +16,8 @@ export interface DatasetSource {
   /** Who to credit, in the form the licence asks for. */
   credit: string;
   licence: string;
+  /** Two or three words for picker headings: what the licence lets us do. */
+  usage: string;
   url: string;
 }
 
@@ -24,6 +27,7 @@ export const DATASET_SOURCES: Record<DatasetSourceId, DatasetSource> = {
     name: 'FeathersV1 Dataset',
     credit: 'A.V. Belko, K.S. Dobratulin. FeathersV1 dataset for feathers classification.',
     licence: 'FeathersV1 licence — non-commercial use only; images remain the property of their original owners',
+    usage: 'Non-commercial use',
     url: 'https://github.com/feathers-dataset/feathersv1-dataset',
   },
   'kaggle-lasota': {
@@ -31,7 +35,16 @@ export const DATASET_SOURCES: Record<DatasetSourceId, DatasetSource> = {
     name: 'Feather Dataset (Kaggle)',
     credit: 'Mirek Lasota and Arda Mavi (2024). Feather Dataset. Kaggle. https://doi.org/10.34740/KAGGLE/DSV/8843733',
     licence: 'CC BY-NC-SA 4.0',
+    usage: 'Non-commercial use',
     url: 'https://www.kaggle.com/datasets/ardamavi/feather-dataset',
+  },
+  'feather-atlas': {
+    id: 'feather-atlas',
+    name: 'The Feather Atlas (USFWS)',
+    credit: 'The Feather Atlas, U.S. Fish & Wildlife Service Forensics Laboratory.',
+    licence: 'Free to use — "no special permission is required" (U.S. federal work)',
+    usage: 'Free to use',
+    url: 'https://www.fws.gov/lab/featheratlas/',
   },
 };
 
@@ -66,4 +79,24 @@ export const DATASET_FEATHERS: DatasetFeather[] = [
   { id: 'ds-scarlet-chested-parrot', src: '/feathers/dataset/scarlet-chested-parrot.png', label: 'Scarlet-chested parrot', species: 'Neophema splendida', dataset: 'kaggle-lasota', original: 'processed-69D87813-78AD-4497-A7D2-587C105E0BB5.jpeg' },
   { id: 'ds-black-woodpecker', src: '/feathers/dataset/black-woodpecker.png', label: 'Black woodpecker', species: 'Dryocopus martius', dataset: 'kaggle-lasota', original: 'processed-49E3208A-DBCD-4B7C-97C2-9B3FFCEC29D8.jpeg' },
   { id: 'ds-eurasian-curlew', src: '/feathers/dataset/eurasian-curlew.png', label: 'Eurasian curlew', species: 'Numenius arquata', dataset: 'kaggle-lasota', original: 'processed-B1AB31D5-2067-4CE3-9A2F-0C3A59A57561.jpeg' },
+  { id: 'ds-american-kestrel', src: '/feathers/dataset/american-kestrel.png', label: 'American kestrel · tail', species: 'Falco sparverius', dataset: 'feather-atlas', original: 'AMKE_tail_male.jpg' },
+  { id: 'ds-bald-eagle', src: '/feathers/dataset/bald-eagle.png', label: 'Bald eagle · tail', species: 'Haliaeetus leucocephalus', dataset: 'feather-atlas', original: 'BAEA_tail_adult.jpg' },
+  { id: 'ds-barred-owl', src: '/feathers/dataset/barred-owl.png', label: 'Barred owl · tail', species: 'Strix varia', dataset: 'feather-atlas', original: 'BDOW_tail_adult.jpg' },
+  { id: 'ds-blue-jay', src: '/feathers/dataset/blue-jay.png', label: 'Blue jay · tail', species: 'Cyanocitta cristata', dataset: 'feather-atlas', original: 'BLJA_tail_adult.jpg' },
+  { id: 'ds-cedar-waxwing', src: '/feathers/dataset/cedar-waxwing.png', label: 'Cedar waxwing · tail', species: 'Bombycilla cedrorum', dataset: 'feather-atlas', original: 'CEDW_tail_adult.jpg' },
+  { id: 'ds-common-raven', src: '/feathers/dataset/common-raven.png', label: 'Common raven · tail', species: 'Corvus corax', dataset: 'feather-atlas', original: 'CORA_tail_male_new.jpg' },
+  { id: 'ds-eastern-bluebird', src: '/feathers/dataset/eastern-bluebird.png', label: 'Eastern bluebird · tail', species: 'Sialia sialis', dataset: 'feather-atlas', original: 'EABL_tail_male.jpg' },
+  { id: 'ds-great-horned-owl', src: '/feathers/dataset/great-horned-owl.png', label: 'Great horned owl · primary', species: 'Bubo virginianus', dataset: 'feather-atlas', original: 'GHOW_primary.jpg' },
+  { id: 'ds-golden-eagle', src: '/feathers/dataset/golden-eagle.png', label: 'Golden eagle · tail', species: 'Aquila chrysaetos', dataset: 'feather-atlas', original: 'GOEA_tail_gwenie.jpg' },
+  { id: 'ds-monk-parakeet', src: '/feathers/dataset/monk-parakeet.png', label: 'Monk parakeet · tail', species: 'Myiopsitta monachus', dataset: 'feather-atlas', original: 'MOPA_tail_male.jpg' },
+  { id: 'ds-northern-harrier', src: '/feathers/dataset/northern-harrier.png', label: 'Northern harrier · tail', species: 'Circus hudsonius', dataset: 'feather-atlas', original: 'NOHA_tail_male.jpg' },
+  { id: 'ds-peregrine-falcon', src: '/feathers/dataset/peregrine-falcon.png', label: 'Peregrine falcon · tail', species: 'Falco peregrinus', dataset: 'feather-atlas', original: 'PEFA_tail_adult.jpg' },
+  { id: 'ds-roseate-spoonbill', src: '/feathers/dataset/roseate-spoonbill.png', label: 'Roseate spoonbill · tail', species: 'Platalea ajaja', dataset: 'feather-atlas', original: 'ROSP_tail_male.jpg' },
+  { id: 'ds-red-shafted-flicker', src: '/feathers/dataset/red-shafted-flicker.png', label: 'Northern flicker (red-shafted) · tail', species: 'Colaptes auratus', dataset: 'feather-atlas', original: 'RSFL_tail_adult_ventral.jpg' },
+  { id: 'ds-red-tailed-hawk', src: '/feathers/dataset/red-tailed-hawk.png', label: 'Red-tailed hawk · tail', species: 'Buteo jamaicensis', dataset: 'feather-atlas', original: 'RTHA_tail_adult.jpg' },
+  { id: 'ds-snowy-owl', src: '/feathers/dataset/snowy-owl.png', label: 'Snowy owl · primary', species: 'Bubo scandiacus', dataset: 'feather-atlas', original: 'SNOW_primary_adult.jpg' },
+  { id: 'ds-stellers-jay', src: '/feathers/dataset/stellers-jay.png', label: "Steller's jay · tail", species: 'Cyanocitta stelleri', dataset: 'feather-atlas', original: 'STJA_tail_female.jpg' },
+  { id: 'ds-wild-turkey', src: '/feathers/dataset/wild-turkey.png', label: 'Wild turkey · tail', species: 'Meleagris gallopavo', dataset: 'feather-atlas', original: 'WITU_tail_fmle.jpg' },
+  { id: 'ds-wood-duck', src: '/feathers/dataset/wood-duck.png', label: 'Wood duck · tail', species: 'Aix sponsa', dataset: 'feather-atlas', original: 'WODU_tail_male.jpg' },
+  { id: 'ds-black-billed-magpie', src: '/feathers/dataset/black-billed-magpie.png', label: 'Black-billed magpie · tail', species: 'Pica hudsonia', dataset: 'feather-atlas', original: 'BBMA_tail_adult.jpg' },
 ];

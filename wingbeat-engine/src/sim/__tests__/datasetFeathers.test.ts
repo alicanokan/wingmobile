@@ -33,24 +33,26 @@ describe('dataset feathers catalogue', () => {
     expect(FEATHERS.slice(firstDataset).map((f) => f.id)).toEqual(DATASET_FEATHERS.map((f) => f.id));
   });
 
-  it('names a species and a known source for every feather, and uses both datasets', () => {
+  it('names a species and a known source for every feather, and uses every source', () => {
     for (const f of DATASET_FEATHERS) {
       expect(f.id).toMatch(/^ds-[a-z0-9-]+$/);
       expect(f.src).toBe(`/feathers/dataset/${f.id.slice(3)}.png`);
       expect(f.label.length).toBeGreaterThan(0);
       expect(f.species).toMatch(/^[A-Z][a-z]+ [a-z]+$/);
       expect(DATASET_SOURCES[f.dataset]).toBeDefined();
+      expect(DATASET_SOURCES[f.dataset].usage.length).toBeGreaterThan(0);
       expect(f.original.length).toBeGreaterThan(0);
     }
     expect(new Set(DATASET_FEATHERS.map((f) => f.dataset))).toEqual(new Set(Object.keys(DATASET_SOURCES)));
   });
 
-  it('credits every image and both datasets in the licence file', () => {
+  it('credits every image and every source in the licence file', () => {
     const licence = readFileSync(publicFile('/feathers/dataset/LICENSE.md'), 'utf8');
     expect(licence).toContain('A.V. Belko, K.S. Dobratulin');
     expect(licence).toContain('Mirek Lasota and Arda Mavi');
     expect(licence).toContain('CC BY-NC-SA 4.0');
     expect(licence).toContain('non-commercial research purposes');
+    expect(licence).toContain('U.S. Fish & Wildlife Service Forensics Laboratory');
     for (const f of DATASET_FEATHERS) {
       expect(licence).toContain(`${f.id.slice(3)}.png`);
       expect(licence).toContain(f.original);

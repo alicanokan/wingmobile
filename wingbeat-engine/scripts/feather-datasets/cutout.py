@@ -17,12 +17,44 @@ def otsu(v):
     mt = mu[-1]; sb = (mt * w - mu) ** 2 / (w * (1 - w) + 1e-12)
     return edges[np.nanargmax(sb)]
 
+def atlas_box(a, pick, margin=0.012):
+    """Feather Atlas scans show a row of feathers on a plain (black or blue) ground
+    with a thin grid and labels. Find the feathers as tall blobs (the grid and text
+    vanish under an opening) and return the box of the pick-th one from the left."""
+    H, W, _ = a.shape
+    border = np.concatenate([a[:3].reshape(-1, 3), a[-3:].reshape(-1, 3), a[:, :3].reshape(-1, 3), a[:, -3:].reshape(-1, 3)])
+    bgc = np.median(border, 0)
+    dist = np.sqrt(((a - bgc) ** 2).sum(-1))
+    fg = ndi.binary_opening(dist > 25, structure=np.ones((5, 5)))
+    # erase the chart grid (thin full-length lines) outside the feathers, so GrabCut
+    # never sees it touching a vane: a grid row/column is mostly "not background"
+    # even after removing the feather blobs from the count.
+    near = ndi.binary_dilation(fg, iterations=2)
+    lineish = (dist > 12) & ~near
+    rows = lineish.mean(1) > 0.25
+    cols = lineish.mean(0) > 0.25
+    rows = ndi.binary_dilation(rows, iterations=1); cols = ndi.binary_dilation(cols, iterations=1)
+    grid = (rows[:, None] | cols[None, :]) & ~ndi.binary_dilation(fg, iterations=1)
+    a[grid] = bgc
+    lab, n = ndi.label(fg)
+    blobs = []
+    for i, sl in enumerate(ndi.find_objects(lab), 1):
+        h = sl[0].stop - sl[0].start
+        if h > H * 0.25: blobs.append(((sl[1].start + sl[1].stop) / 2, sl))
+    blobs.sort(key=lambda b: b[0])
+    if pick >= len(blobs): raise SystemExit(f"only {len(blobs)} feathers found, pick={pick}")
+    sl = blobs[pick][1]
+    return [max(0, sl[1].start / W - margin), max(0, sl[0].start / H - margin),
+            min(1, sl[1].stop / W + margin), min(1, sl[0].stop / H + margin * 2)]
+
 def process(item, outdir):
     im = Image.open(os.path.join(ROOT, item['src'])).convert('RGB')
     s = 1600 / max(im.size)
     if s < 1: im = im.resize((round(im.width * s), round(im.height * s)), Image.LANCZOS)
     a = np.asarray(im).astype(np.float32)
     H, W, _ = a.shape
+    if 'pick' in item and 'box' not in item:
+        item['box'] = atlas_box(a, item['pick'])
     if item.get('sheet'):  # big sheet with uneven light: local background estimate
         small = im.resize((max(1, W // 16), max(1, H // 16)), Image.BILINEAR)
         sm = np.asarray(small).astype(np.float32)

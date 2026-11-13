@@ -225,5 +225,205 @@
   ],
   "sheet": true,
   "rect": false
+ },
+ {
+  "id": "fa-american-kestrel",
+  "src": "featheratlas/AMKE_tail_male.jpg",
+  "common": "American kestrel",
+  "latin": "Falco sparverius",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "AMKE_tail_male.jpg",
+  "pick": 2
+ },
+ {
+  "id": "fa-bald-eagle",
+  "src": "featheratlas/BAEA_tail_adult.jpg",
+  "common": "Bald eagle",
+  "latin": "Haliaeetus leucocephalus",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "BAEA_tail_adult.jpg",
+  "pick": 3
+ },
+ {
+  "id": "fa-barred-owl",
+  "src": "featheratlas/BDOW_tail_adult.jpg",
+  "common": "Barred owl",
+  "latin": "Strix varia",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "BDOW_tail_adult.jpg",
+  "pick": 2
+ },
+ {
+  "id": "fa-blue-jay",
+  "src": "featheratlas/BLJA_tail_adult.jpg",
+  "common": "Blue jay",
+  "latin": "Cyanocitta cristata",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "BLJA_tail_adult.jpg",
+  "pick": 4
+ },
+ {
+  "id": "fa-cedar-waxwing",
+  "src": "featheratlas/CEDW_tail_adult.jpg",
+  "common": "Cedar waxwing",
+  "latin": "Bombycilla cedrorum",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "CEDW_tail_adult.jpg",
+  "pick": 2
+ },
+ {
+  "id": "fa-common-raven",
+  "src": "featheratlas/CORA_tail_male_new.jpg",
+  "common": "Common raven",
+  "latin": "Corvus corax",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "CORA_tail_male_new.jpg",
+  "pick": 3
+ },
+ {
+  "id": "fa-eastern-bluebird",
+  "src": "featheratlas/EABL_tail_male.jpg",
+  "common": "Eastern bluebird",
+  "latin": "Sialia sialis",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "EABL_tail_male.jpg",
+  "pick": 2
+ },
+ {
+  "id": "fa-great-horned-owl",
+  "src": "featheratlas/GHOW_primary.jpg",
+  "common": "Great horned owl",
+  "latin": "Bubo virginianus",
+  "featherType": "Primaries",
+  "source": "feather-atlas",
+  "original": "GHOW_primary.jpg",
+  "pick": 2
+ },
+ {
+  "id": "fa-golden-eagle",
+  "src": "featheratlas/GOEA_tail_gwenie.jpg",
+  "common": "Golden eagle",
+  "latin": "Aquila chrysaetos",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "GOEA_tail_gwenie.jpg",
+  "pick": 1
+ },
+ {
+  "id": "fa-monk-parakeet",
+  "src": "featheratlas/MOPA_tail_male.jpg",
+  "common": "Monk parakeet",
+  "latin": "Myiopsitta monachus",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "MOPA_tail_male.jpg",
+  "pick": 5
+ },
+ {
+  "id": "fa-northern-harrier",
+  "src": "featheratlas/NOHA_tail_male.jpg",
+  "common": "Northern harrier",
+  "latin": "Circus hudsonius",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "NOHA_tail_male.jpg",
+  "pick": 1
+ },
+ {
+  "id": "fa-peregrine-falcon",
+  "src": "featheratlas/PEFA_tail_adult.jpg",
+  "common": "Peregrine falcon",
+  "latin": "Falco peregrinus",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "PEFA_tail_adult.jpg",
+  "pick": 4
+ },
+ {
+  "id": "fa-roseate-spoonbill",
+  "src": "featheratlas/ROSP_tail_male.jpg",
+  "common": "Roseate spoonbill",
+  "latin": "Platalea ajaja",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "ROSP_tail_male.jpg",
+  "pick": 1
+ },
+ {
+  "id": "fa-red-shafted-flicker",
+  "src": "featheratlas/RSFL_tail_adult_ventral.jpg",
+  "common": "Northern flicker (red-shafted)",
+  "latin": "Colaptes auratus",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "RSFL_tail_adult_ventral.jpg",
+  "pick": 2
+ },
+ {
+  "id": "fa-red-tailed-hawk",
+  "src": "featheratlas/RTHA_tail_adult.jpg",
+  "common": "Red-tailed hawk",
+  "latin": "Buteo jamaicensis",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "RTHA_tail_adult.jpg",
+  "pick": 4
+ },
+ {
+  "id": "fa-snowy-owl",
+  "src": "featheratlas/SNOW_primary_adult.jpg",
+  "common": "Snowy owl",
+  "latin": "Bubo scandiacus",
+  "featherType": "Primaries",
+  "source": "feather-atlas",
+  "original": "SNOW_primary_adult.jpg",
+  "pick": 2
+ },
+ {
+  "id": "fa-stellers-jay",
+  "src": "featheratlas/STJA_tail_female.jpg",
+  "common": "Steller's jay",
+  "latin": "Cyanocitta stelleri",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "STJA_tail_female.jpg",
+  "pick": 1
+ },
+ {
+  "id": "fa-wild-turkey",
+  "src": "featheratlas/WITU_tail_fmle.jpg",
+  "common": "Wild turkey",
+  "latin": "Meleagris gallopavo",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "WITU_tail_fmle.jpg",
+  "pick": 4
+ },
+ {
+  "id": "fa-wood-duck",
+  "src": "featheratlas/WODU_tail_male.jpg",
+  "common": "Wood duck",
+  "latin": "Aix sponsa",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "WODU_tail_male.jpg",
+  "pick": 5
+ },
+ {
+  "id": "fa-black-billed-magpie",
+  "src": "featheratlas/BBMA_tail_adult.jpg",
+  "common": "Black-billed magpie",
+  "latin": "Pica hudsonia",
+  "featherType": "Rectrices",
+  "source": "feather-atlas",
+  "original": "BBMA_tail_adult.jpg",
+  "pick": 5
  }
 ]

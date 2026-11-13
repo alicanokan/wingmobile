@@ -143,8 +143,9 @@ Git so a clean checkout passes the asset tests and produces a complete site.
 
 ## Dataset feathers
 
-22 feathers in the collection (ids `ds-*`, listed in `src/sim/datasetFeathers.ts`) were cut out of two
-public datasets: **FeathersV1** (A.V. Belko, K.S. Dobratulin) and the **Kaggle Feather Dataset**
-(Mirek Lasota & Arda Mavi, CC BY-NC-SA 4.0). Both are licensed for **non-commercial use only**.
+42 feathers in the collection (ids `ds-*`, listed in `src/sim/datasetFeathers.ts`) were cut out of three
+public sources: **FeathersV1** (A.V. Belko, K.S. Dobratulin) and the **Kaggle Feather Dataset**
+(Mirek Lasota & Arda Mavi, CC BY-NC-SA 4.0), both **non-commercial use only**, and the
+**USFWS Feather Atlas** (free to use, no permission required).
 Credits, licence texts and the source file of every image are in
 `public/feathers/dataset/LICENSE.md`; the cut-out pipeline is in `scripts/feather-datasets/`.
