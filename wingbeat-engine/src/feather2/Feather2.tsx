@@ -2066,13 +2066,14 @@ export default function Feather2({ embedded = false, featherId, play, stemInput,
         <button className="f2-create" onClick={() => pick(FEATHERS.find((feather) => !feather.procedural)!.src, 'Untitled feather')}>＋ <span>Create feather</span></button>
         <button className="f2-upload" aria-label="Import feather" onClick={() => featherFile.current?.click()}><LabIcon name="upload" /><span>Import photo</span></button>
         <div className="f2-library-subhead"><span>Specimens</span><b>{String(FEATHERS.length - 1).padStart(2, '0')}</b></div>
-        <div className="f2-gallery">{FEATHERS.filter((f) => !f.procedural).map((f, i) => (
+        <div className="f2-gallery">{FEATHERS.filter((f) => !f.procedural).flatMap((f, i, list) => [
+          ...(f.dataset && !list[i - 1]?.dataset ? [<div key="dataset-group" className="f2-gallery-group">From public feather datasets<small>Non-commercial use</small></div>] : []),
           <button key={f.id} className={`f2-specimen ${source.src === f.src ? 'selected' : ''}`} onClick={() => pick(f.src, f.label)} aria-pressed={source.src === f.src} title={f.label}>
             <span className="f2-specimen-number">{String(i + 1).padStart(2, '0')}</span>
             <img src={f.src.replace('/feathers/', '/feathers/thumbs/')} alt={f.label} loading="lazy" decoding="async" />
             <span className="f2-specimen-label">{f.label}</span>
-          </button>
-        ))}</div>
+          </button>,
+        ])}</div>
         <div className="f2-library-foot">Your feather archive</div>
       </aside>
 

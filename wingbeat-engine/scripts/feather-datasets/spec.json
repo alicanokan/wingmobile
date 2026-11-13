@@ -1,0 +1,229 @@
+[
+ {
+  "id": "fv1-eurasian-sparrowhawk",
+  "src": "feathersv1/accipitriformes_accipiter_nisus_00155.jpg",
+  "common": "Eurasian sparrowhawk",
+  "latin": "Accipiter nisus",
+  "source": "feathersv1",
+  "original": "accipitriformes_accipiter_nisus_00155.jpg",
+  "box": [
+   0.04,
+   0.0,
+   0.96,
+   0.83
+  ]
+ },
+ {
+  "id": "fv1-european-nightjar",
+  "src": "feathersv1/caprimulgiformes_caprimulgus_europaeus_00024.jpg",
+  "common": "European nightjar",
+  "latin": "Caprimulgus europaeus",
+  "source": "feathersv1",
+  "original": "caprimulgiformes_caprimulgus_europaeus_00024.jpg"
+ },
+ {
+  "id": "fv1-oystercatcher",
+  "src": "feathersv1/charadriiformes_haematopus_ostralegus_00233.jpg",
+  "common": "Eurasian oystercatcher",
+  "latin": "Haematopus ostralegus",
+  "source": "feathersv1",
+  "original": "charadriiformes_haematopus_ostralegus_00233.jpg"
+ },
+ {
+  "id": "fv1-kingfisher",
+  "src": "feathersv1/coraciiformes_alcedo_atthis_00036.jpg",
+  "common": "Common kingfisher",
+  "latin": "Alcedo atthis",
+  "source": "feathersv1",
+  "original": "coraciiformes_alcedo_atthis_00036.jpg"
+ },
+ {
+  "id": "fv1-blue-bellied-roller",
+  "src": "feathersv1/coraciiformes_coracias_cyanogaster_00000.jpg",
+  "common": "Blue-bellied roller",
+  "latin": "Coracias cyanogaster",
+  "source": "feathersv1",
+  "original": "coraciiformes_coracias_cyanogaster_00000.jpg"
+ },
+ {
+  "id": "fv1-common-pheasant",
+  "src": "feathersv1/galliformes_phasianus_colchicus_00059.jpg",
+  "common": "Common pheasant",
+  "latin": "Phasianus colchicus",
+  "source": "feathersv1",
+  "original": "galliformes_phasianus_colchicus_00059.jpg"
+ },
+ {
+  "id": "fv1-capercaillie",
+  "src": "feathersv1/galliformes_tetrao_urogallus_00000.jpg",
+  "common": "Western capercaillie",
+  "latin": "Tetrao urogallus",
+  "source": "feathersv1",
+  "original": "galliformes_tetrao_urogallus_00000.jpg"
+ },
+ {
+  "id": "fv1-eurasian-jay",
+  "src": "feathersv1/passeriformes_garrulus_glandarius_00112.jpg",
+  "common": "Eurasian jay",
+  "latin": "Garrulus glandarius",
+  "source": "feathersv1",
+  "original": "passeriformes_garrulus_glandarius_00112.jpg",
+  "norotate": true
+ },
+ {
+  "id": "fv1-golden-oriole",
+  "src": "feathersv1/passeriformes_oriolus_oriolus_00000.jpg",
+  "common": "Eurasian golden oriole",
+  "latin": "Oriolus oriolus",
+  "source": "feathersv1",
+  "original": "passeriformes_oriolus_oriolus_00000.jpg"
+ },
+ {
+  "id": "fv1-greater-flamingo",
+  "src": "feathersv1/phoenicopteriformes_phoenicopterus_roseus_00021.jpg",
+  "common": "Greater flamingo",
+  "latin": "Phoenicopterus roseus",
+  "source": "feathersv1",
+  "original": "phoenicopteriformes_phoenicopterus_roseus_00021.jpg"
+ },
+ {
+  "id": "fv1-great-spotted-woodpecker",
+  "src": "feathersv1/piciformes_dendrocopos_major_00050.jpg",
+  "common": "Great spotted woodpecker",
+  "latin": "Dendrocopos major",
+  "source": "feathersv1",
+  "original": "piciformes_dendrocopos_major_00050.jpg"
+ },
+ {
+  "id": "fv1-green-woodpecker",
+  "src": "feathersv1/piciformes_picus_viridis_00000.jpg",
+  "common": "European green woodpecker",
+  "latin": "Picus viridis",
+  "source": "feathersv1",
+  "original": "piciformes_picus_viridis_00000.jpg"
+ },
+ {
+  "id": "fv1-yellow-crowned-amazon",
+  "src": "feathersv1/psittaciformes_amazona_ochrocephala_00025.jpg",
+  "common": "Yellow-crowned amazon",
+  "latin": "Amazona ochrocephala",
+  "source": "feathersv1",
+  "original": "psittaciformes_amazona_ochrocephala_00025.jpg",
+  "box": [
+   0.03,
+   0.0,
+   0.97,
+   0.88
+  ]
+ },
+ {
+  "id": "fv1-turquoise-parrot",
+  "src": "feathersv1/psittaciformes_neophema_pulchella_00024.jpg",
+  "common": "Turquoise parrot",
+  "latin": "Neophema pulchella",
+  "source": "feathersv1",
+  "original": "psittaciformes_neophema_pulchella_00024.jpg"
+ },
+ {
+  "id": "fv1-long-eared-owl",
+  "src": "feathersv1/strigiformes_asio_otus_00078.jpg",
+  "common": "Long-eared owl",
+  "latin": "Asio otus",
+  "source": "feathersv1",
+  "original": "strigiformes_asio_otus_00078.jpg"
+ },
+ {
+  "id": "fv1-eurasian-eagle-owl",
+  "src": "feathersv1/strigiformes_bubo_bubo_00023.jpg",
+  "common": "Eurasian eagle-owl",
+  "latin": "Bubo bubo",
+  "source": "feathersv1",
+  "original": "strigiformes_bubo_bubo_00023.jpg"
+ },
+ {
+  "id": "fv1-barn-owl",
+  "src": "feathersv1/strigiformes_tyto_alba_00081.jpg",
+  "common": "Barn owl",
+  "latin": "Tyto alba",
+  "source": "feathersv1",
+  "original": "strigiformes_tyto_alba_00081.jpg"
+ },
+ {
+  "id": "fv1-cuban-trogon",
+  "src": "feathersv1/trogoniformes_priotelus_temnurus_00016.jpg",
+  "common": "Cuban trogon",
+  "latin": "Priotelus temnurus",
+  "source": "feathersv1",
+  "original": "trogoniformes_priotelus_temnurus_00016.jpg"
+ },
+ {
+  "id": "kg-green-winged-macaw",
+  "src": "kaggle/Feather_Dataset/processed-966B1B1B-7A97-4119-BD8A-78870DF1530F.jpeg",
+  "common": "Green-winged macaw",
+  "latin": "Ara chloropterus",
+  "source": "kaggle-lasota",
+  "original": "processed-966B1B1B-7A97-4119-BD8A-78870DF1530F.jpeg",
+  "note": "Ara zielonoskrzydła",
+  "seed": [
+   0.41,
+   0.56
+  ],
+  "sheet": true,
+  "box": [
+   0.28,
+   0.24,
+   0.555,
+   0.9
+  ]
+ },
+ {
+  "id": "kg-scarlet-chested-parrot",
+  "src": "kaggle/Feather_Dataset/processed-69D87813-78AD-4497-A7D2-587C105E0BB5.jpeg",
+  "common": "Scarlet-chested parrot",
+  "latin": "Neophema splendida",
+  "source": "kaggle-lasota",
+  "original": "processed-69D87813-78AD-4497-A7D2-587C105E0BB5.jpeg",
+  "note": "Łąkówka wspaniała",
+  "seed": [
+   0.44,
+   0.61
+  ],
+  "sheet": true,
+  "box": [
+   0.38,
+   0.4,
+   0.5,
+   0.83
+  ]
+ },
+ {
+  "id": "kg-black-woodpecker",
+  "src": "kaggle/Feather_Dataset/processed-49E3208A-DBCD-4B7C-97C2-9B3FFCEC29D8.jpeg",
+  "common": "Black woodpecker",
+  "latin": "Dryocopus martius",
+  "source": "kaggle-lasota",
+  "original": "processed-49E3208A-DBCD-4B7C-97C2-9B3FFCEC29D8.jpeg",
+  "note": "Dzięcioł czarny",
+  "seed": [
+   0.53,
+   0.53
+  ],
+  "sheet": true,
+  "rect": false
+ },
+ {
+  "id": "kg-eurasian-curlew",
+  "src": "kaggle/Feather_Dataset/processed-B1AB31D5-2067-4CE3-9A2F-0C3A59A57561.jpeg",
+  "common": "Eurasian curlew",
+  "latin": "Numenius arquata",
+  "source": "kaggle-lasota",
+  "original": "processed-B1AB31D5-2067-4CE3-9A2F-0C3A59A57561.jpeg",
+  "note": "Kulik wielki",
+  "seed": [
+   0.4,
+   0.5
+  ],
+  "sheet": true,
+  "rect": false
+ }
+]

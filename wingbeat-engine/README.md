@@ -140,3 +140,11 @@ loops in `public/music-tests`, and `public/creative-assets/feather-motion.mp4`
 are required runtime assets. The app ignore rules explicitly include them
 despite the parent repository excluding other media. Keep these files in
 Git so a clean checkout passes the asset tests and produces a complete site.
+
+## Dataset feathers
+
+22 feathers in the collection (ids `ds-*`, listed in `src/sim/datasetFeathers.ts`) were cut out of two
+public datasets: **FeathersV1** (A.V. Belko, K.S. Dobratulin) and the **Kaggle Feather Dataset**
+(Mirek Lasota & Arda Mavi, CC BY-NC-SA 4.0). Both are licensed for **non-commercial use only**.
+Credits, licence texts and the source file of every image are in
+`public/feathers/dataset/LICENSE.md`; the cut-out pipeline is in `scripts/feather-datasets/`.

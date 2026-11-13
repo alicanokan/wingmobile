@@ -659,3 +659,19 @@
 .xp-stem-meter { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
 .xp-stem-meter i { display: block; height: 100%; background: #8fd3ff; }
 .xp-stem.open .xp-stem-meter i { background: #e9c46a; }
+
+/* group label before the dataset feathers in the feather sheet */
+.xp-feathers-group {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+.xp-feathers-group small {
+  margin-left: 8px;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.7;
+}

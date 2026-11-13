@@ -1,11 +1,15 @@
 // AUTO-GENERATED catalog of the feather collection in public/feathers/.
 // Regenerate by re-running the copy+catalog step, or edit labels by hand.
 
+import { DATASET_FEATHERS, type DatasetSourceId } from './datasetFeathers.ts';
+
 export interface FeatherItem {
   id: string;
   src: string;
   label: string;
   procedural?: boolean;
+  /** Set for feathers curated from a public dataset (see datasetFeathers.ts). */
+  dataset?: DatasetSourceId;
 }
 
 export const FEATHERS: FeatherItem[] = [
@@ -54,6 +58,8 @@ export const FEATHERS: FeatherItem[] = [
   { id: '43f', src: '/feathers/43f.png', label: 'Feather 43' },
   { id: '44f', src: '/feathers/44f.png', label: 'Feather 44' },
   { id: '45f', src: '/feathers/45f.png', label: 'Feather 45' },
+  // Dataset feathers go last so the built-ins keep their order (and scene seeds).
+  ...DATASET_FEATHERS,
 ];
 
 export const DEFAULT_FEATHER = 'procedural';

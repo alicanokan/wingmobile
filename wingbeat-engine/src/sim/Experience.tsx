@@ -679,7 +679,10 @@ export default function Experience() {
             Feather <em>{featherLabel}</em>
           </h2>
           <div className="xp-feathers">
-            {FEATHERS.map((f) => (
+            {FEATHERS.flatMap((f, i) => [
+              ...(f.dataset && !FEATHERS[i - 1]?.dataset
+                ? [<div key="dataset-group" className="xp-feathers-group">From public feather datasets <small>non-commercial use · credits on the home page</small></div>]
+                : []),
               <button
                 key={f.id}
                 className={`xp-feather ${feather === f.id ? 'active' : ''}`}
@@ -693,8 +696,8 @@ export default function Experience() {
                   <img src={f.src.replace('/feathers/', '/feathers/thumbs/')} alt={f.label} loading="lazy" decoding="async" />
                 )}
                 <span className="xp-feather-name">{f.label}</span>
-              </button>
-            ))}
+              </button>,
+            ])}
           </div>
         </section>
       )}

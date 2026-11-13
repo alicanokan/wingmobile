@@ -11,6 +11,8 @@ dist-ssr
 # Override the parent repository's blanket media exclusions for these assets.
 !public/feathers/*.png
 !public/feathers/thumbs/*.png
+!public/feathers/dataset/*.png
+!public/feathers/thumbs/dataset/*.png
 !public/music-tests/*.wav
 !public/creative-assets/feather-motion.mp4
 !public/og.jpg

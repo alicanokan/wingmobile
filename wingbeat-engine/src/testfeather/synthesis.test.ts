@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 describe('feather sound atlas',()=>{
   it('covers every real feather once, with five usable layers and local images',()=>{
     const ids=SOUND_FEATHERS.map(f=>f.id);
-    expect([...ids].sort()).toEqual(FEATHERS.filter(f=>!f.procedural).map(f=>f.id).sort());
+    expect([...ids].sort()).toEqual(FEATHERS.filter(f=>!f.procedural&&!f.dataset).map(f=>f.id).sort());
     expect(new Set(ids).size).toBe(ids.length);
     expect(new Set(SOUND_FEATHERS.map(f=>f.style)).size).toBe(ids.length);
     expect(new Set(SOUND_FEATHERS.map(f=>f.continent))).toEqual(new Set(CONTINENTS));

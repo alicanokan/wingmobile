@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import './landing.css';
+import { DATASET_SOURCES } from './datasetFeathers.ts';
 export type EntryMode = 'fullscreen' | 'control' | 'performance' | 'mobile';
 
 type Mark = 'hold' | 'air' | 'listen';
@@ -164,6 +165,7 @@ export function Landing({ onPick }: { onPick: (m: EntryMode) => void }) {
       <div className="wing-footer-line"><a href="/" className="wing-wordmark">Wing Beat</a><span>Hold lightly. Listen closely.</span></div>
       <details className="wing-tools" id="enter"><summary>Studio &amp; installation tools <span aria-hidden="true">＋</span></summary><nav aria-label="Studio and installation">{TOOLS.map((tool) => <a key={tool.label} href={tool.href} onClick={(event) => { if (!tool.mode) return; event.preventDefault(); onPick(tool.mode); }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={tool.icon} /></svg>{tool.label}<span aria-hidden="true">↗</span></a>)}</nav></details>
       <p className="wing-credit">Wing Beat is an interactive installation by Alican Okan.</p>
+      <p className="wing-credit">Some feathers in the collection come from public datasets, used non-commercially: {Object.values(DATASET_SOURCES).map((source, i) => <span key={source.id}>{i > 0 && '; '}<a href={source.url} rel="noopener noreferrer" target="_blank">{source.credit.replace(/ https?:\/\/\S+$/, '')}</a> ({source.licence.split(' — ')[0]})</span>)}. <a href="/feathers/dataset/LICENSE.md">Licences and credits</a>.</p>
     </footer>
   </main>;
 }

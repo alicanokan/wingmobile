@@ -2014,3 +2014,21 @@
 .f2-presets-load:hover { background: rgba(181, 203, 162, 0.06); }
 .f2-presets-delete { width: 36px; background: transparent; border: 0; border-left: 1px solid #2e3528; color: #7e8c70; cursor: pointer; font-size: 12px; }
 .f2-presets-delete:hover { color: #e6ebdf; }
+
+/* group label before the dataset feathers in the collection */
+.f2-gallery-group {
+  grid-column: 1 / -1;
+  flex: 0 0 auto;
+  align-self: center;
+  margin-top: 8px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.f2-gallery-group small {
+  display: block;
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.75;
+}
