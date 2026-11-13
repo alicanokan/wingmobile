@@ -37,6 +37,16 @@ export interface CameraReading {
   zones: number[];
 }
 
+/** Noise gate for a camera level: at or below `gate` reads as silence, above
+ *  it rescales to 0..1. A webcam never reads a true 0 — sensor noise,
+ *  auto-exposure and a person breathing in frame all leak a little motion —
+ *  so without a gate a camera-driven layer never closes. */
+export function gateLevel(v: number, gate: number): number {
+  const g = Math.max(0, Math.min(0.95, Number.isFinite(gate) ? gate : 0));
+  if (!Number.isFinite(v) || v <= g) return 0;
+  return Math.min(1, (v - g) / (1 - g));
+}
+
 // Processing resolution — small is fine (and fast); motion is a coarse signal.
 const PW = 96;
 const PH = 72;

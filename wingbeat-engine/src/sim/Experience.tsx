@@ -45,7 +45,7 @@ import { loadFeatherPresets, onFeatherPresetsChange, type FeatherPreset } from '
 import { useConductorSync, applyConductorConfig } from '../net/liveSync.ts';
 import { listCloudPresets, type CloudPreset } from '../net/cloud.ts';
 import { DEVICE_COUNT } from './inputs.ts';
-import { CameraSource } from './camera.ts';
+import { CameraSource, gateLevel } from './camera.ts';
 import { BUILTIN_PRESETS, getPreset } from './presets.ts';
 import { applySensorSamples } from '../net/liveSync.ts';
 import { LOOP_NATIVE_BPM } from '../engine/AudioEngine.ts';
@@ -62,6 +62,7 @@ const PULSE_KEY = 'wb.xpPulse.v1';
 const MASTER_KEY = 'wb.xpMaster.v1';
 const PERMS_KEY = 'wb.xpPerms.v1';
 const GUIDE_KEY = 'wb.xpGuide.dismissed.v1';
+const CAM_GATE_KEY = 'wb.xpCamGate.v1';
 const PERMS_LABEL: Record<PhonePerms, { name: string; hint: string }> = {
   play: { name: 'Play only', hint: 'phones move the feather, nothing else' },
   fx: { name: 'Play + FX', hint: 'phones also sweep the FX pad' },
@@ -304,6 +305,12 @@ export default function Experience() {
   const cam = useMemo(() => new CameraSource(), []);
   const camParts = useRef<number[]>([]);
   const camAir = useRef<number[]>(new Array(SLOT_PART.length).fill(0));
+  // Trigger threshold: zone motion at or below it is silence, so a layer
+  // closes when the feather stops (webcam noise never reads a true 0).
+  const [camGate, setCamGate] = useState(() => loadJson(CAM_GATE_KEY, (raw) => finite(raw, 0.3, 0, 0.9)));
+  const camGateRef = useRef(camGate);
+  camGateRef.current = camGate;
+  useEffect(() => saveJson(CAM_GATE_KEY, camGate), [camGate]);
 
   const puff = (i: number, amount: number) => {
     const sens = rig.sensors[SLOT_PART[i]]?.sensitivity ?? 1;
@@ -515,7 +522,7 @@ export default function Experience() {
       if (cam.active && camParts.current.length) {
         const zones = cam.read().zones;
         // zoned: strip z → its part; unzoned: every part hears the whole frame
-        camParts.current.forEach((part, z) => (camAir.current[part] = zones[cam.zoneCount > 1 ? z : 0] ?? 0));
+        camParts.current.forEach((part, z) => (camAir.current[part] = gateLevel(zones[cam.zoneCount > 1 ? z : 0] ?? 0, camGateRef.current)));
       }
       for (let i = 0; i < SLOT_PART.length; i++) {
 
@@ -585,6 +592,26 @@ export default function Experience() {
   // ---- built-in presets (ship with the site: stems + camera zones) --------
   const [builtin, setBuiltin] = useState('');
   const [camState, setCamState] = useState<'off' | 'starting' | 'on' | 'blocked'>('off');
+  const [zoneLabels, setZoneLabels] = useState<string[]>([]);
+  const [camGain, setCamGain] = useState(() => cam.sensitivity);
+  useEffect(() => void (cam.sensitivity = camGain), [cam, camGain]);
+  // live preview (motion mask + strip dividers) and per-strip meters
+  const camCanvas = useRef<HTMLCanvasElement | null>(null);
+  const [zoneLv, setZoneLv] = useState<number[]>([]);
+  useEffect(() => {
+    if (camState !== 'on') return;
+    const c = camCanvas.current;
+    if (c) {
+      c.width = cam.size.w;
+      c.height = cam.size.h;
+      cam.attachPreview(c);
+    }
+    const id = setInterval(() => setZoneLv(cam.lastZones), 80);
+    return () => {
+      clearInterval(id);
+      cam.attachPreview(null);
+    };
+  }, [cam, camState]);
   const stopCam = () => {
     camParts.current = [];
     cam.stop();
@@ -611,6 +638,8 @@ export default function Experience() {
           .filter((i) => i >= 0)
       : [];
     if (!parts.length) return stopCam();
+    setZoneLabels(parts.map((i) => (b.sensorSamples?.[SLOT_PART[i]]?.name ?? SENSOR_CHANNELS[i]?.label ?? `Part ${i + 1}`).replace(/^.*·\s*/, '')));
+    camParts.current = parts;
     camParts.current = parts;
     cam.zoneCount = r?.camZones ? parts.length : 1;
     setCamState('starting');
@@ -758,11 +787,43 @@ export default function Experience() {
               </button>
             ))}
           </div>
-          {camState !== 'off' && (
+          {(camState === 'starting' || camState === 'blocked') && (
             <div className="xp-note">
               {camState === 'starting' && 'starting the camera…'}
               {camState === 'blocked' && 'camera blocked — allow camera access for this site and pick the preset again'}
-              {camState === 'on' && <>camera on — move a feather on the left, middle or right <button className="xp-mini" onClick={stopCam}>stop camera</button></>}
+            </div>
+          )}
+          {camState === 'on' && (
+            <div className="xp-cam">
+              <canvas ref={camCanvas} className="xp-cam-view" aria-label="camera motion, split into strips" />
+              <div className="xp-cam-zones">
+                {zoneLabels.map((label, z) => {
+                  const raw = zoneLv[z] ?? 0;
+                  const open = raw > camGate;
+                  return (
+                    <div key={z} className={`xp-cam-zone ${open ? 'open' : ''}`}>
+                      <span>{['left', 'centre', 'right'][z] ?? `strip ${z + 1}`}</span>
+                      <b>{label}</b>
+                      <div className="xp-cam-meter">
+                        <i style={{ width: `${Math.round(raw * 100)}%` }} />
+                        <em style={{ left: `${Math.round(camGate * 100)}%` }} title="trigger threshold" />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <label className="xp-cam-knob">
+                <span>Trigger threshold <i>{Math.round(camGate * 100)}%</i></span>
+                <input type="range" min={0} max={0.9} step={0.01} value={camGate} onChange={(e) => setCamGate(Number(e.target.value))} />
+              </label>
+              <label className="xp-cam-knob">
+                <span>Camera gain <i>{Math.round(camGain)}×</i></span>
+                <input type="range" min={1} max={30} step={1} value={camGain} onChange={(e) => setCamGain(Number(e.target.value))} />
+              </label>
+              <div className="xp-note">
+                A layer plays while its strip's bar is past the line, and stops when it drops below. If a layer won't stop, raise the threshold. If it's hard to trigger, lower it or raise the gain.{' '}
+                <button className="xp-mini" onClick={stopCam}>stop camera</button>
+              </div>
             </div>
           )}
 
