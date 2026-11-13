@@ -43,7 +43,7 @@ import type { PresetBundle, PresetContext } from './presets.ts';
 import { SettingsPanel } from './SettingsPanel.tsx';
 import { RigPanel } from './RigPanel.tsx';
 import { MicSource } from './mic.ts';
-import { CameraSource } from './camera.ts';
+import { CameraSource, gateLevel } from './camera.ts';
 import { CameraPanel } from './CameraPanel.tsx';
 import { MicPanel } from './MicPanel.tsx';
 import { KeyboardPanel } from './KeyboardPanel.tsx';
@@ -279,6 +279,14 @@ export default function App() {
       saveRouting(next);
       return next;
     });
+  // What each camera strip plays (left → right), for the Camera panel: the
+  // loop on that slot's part(s) if one is loaded, else the part name.
+  const camZoneLabels = SLOTS.filter((sl) => sources[sl.id] === 'camera').map(
+    (sl) =>
+      (parts[sl.id] ?? [])
+        .map((p) => audio.loopName(p).replace(/^.*·\s*/, '') || PARTS.find((x) => x.id === p)?.label || p)
+        .join(' + ') || sl.name,
+  );
   // Hard-stop the camera: close the panel AND unpatch any sensor routed to it,
   // so the webcam actually releases (it stays on as long as anything needs it).
   const disableCamera = () =>
@@ -648,7 +656,12 @@ export default function App() {
         const src = sources[slot.id];
         let v = 0;
         if (src === 'mic') v = mic.active ? micLvl : 0;
-        else if (src === 'camera') v = !cam.active ? 0 : zoned ? (camReading?.zones[camSlots.indexOf(slot.id)] ?? 0) : camLvl;
+        else if (src === 'camera') {
+          // zoned: each slot hears its own strip, through that strip's trigger
+          // threshold, so webcam noise in one strip can't hold a layer open
+          const z = camSlots.indexOf(slot.id);
+          v = !cam.active ? 0 : zoned ? gateLevel(camReading?.zones[z] ?? 0, cam.zoneGate(z)) : camLvl;
+        }
         else if (isDeviceKey(src)) {
           const di = deviceIndex(src);
           const raw = deviceMotion.current[di] ?? 0;
@@ -1174,7 +1187,7 @@ export default function App() {
           {showPair && (
             <DevicesPanel phonePerms={phonePerms} onPhonePerms={setPhonePerms} devices={deviceInfo} statuses={deviceStatus} peers={devicePeers} levels={levels} log={linkLog} onClose={() => setShowPair(false)} thresholds={deviceThresholds} onThresholdChange={setDeviceThreshold} />
           )}
-          {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} compact={entryMode === 'mobile'} zones={camZones} onZones={setCamZones} />}
+          {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} compact={entryMode === 'mobile'} zones={camZones} onZones={setCamZones} zoneLabels={camZoneLabels} />}
         </div>
 
         {!mobileMenu && !showPair && !camOn && mobileShowCollection && (
@@ -1426,7 +1439,7 @@ export default function App() {
       )}
       {showScene && <ScenePanel snapshot={snapshot} engine={engine} audio={audio} onClose={() => setShowScene(false)} />}
       {micOn && <MicPanel mic={mic} onClose={() => setMicOn(false)} />}
-      {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} zones={camZones} onZones={setCamZones} />}
+      {camOn && <CameraPanel cam={cam} onClose={() => setCamOn(false)} onDisable={disableCamera} zones={camZones} onZones={setCamZones} zoneLabels={camZoneLabels} />}
       {showRig && <RigPanel snapshot={snapshot} audio={audio} onClose={() => setShowRig(false)} presetContext={presetContext} onPresetRecall={onPresetRecall} />}
       {audioAlert}
       {showSettings && (

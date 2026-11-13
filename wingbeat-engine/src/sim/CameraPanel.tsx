@@ -19,13 +19,21 @@ interface Props {
   /** Split the frame into one strip per camera-routed slot. */
   zones?: boolean;
   onZones?: (on: boolean) => void;
+  /** What each strip plays, left → right (shown on its meter). */
+  zoneLabels?: string[];
 }
 
-export function CameraPanel({ cam, onClose, onDisable, compact, zones, onZones }: Props) {
+export function CameraPanel({ cam, onClose, onDisable, compact, zones, onZones, zoneLabels }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const [hud, setHud] = useState(0);
   const [zoneHud, setZoneHud] = useState<number[]>([]);
+  // per-strip trigger thresholds (persisted in the camera calibration)
+  const [gates, setGates] = useState<number[]>(() => Array.from({ length: 8 }, (_, z) => cam.zoneGate(z)));
+  const setGate = (z: number, v: number) => {
+    cam.setZoneGate(z, v);
+    setGates((g) => g.map((x, i) => (i === z ? cam.zoneGate(z) : x)));
+  };
   const [contrast, setContrast] = useState(cam.contrast);
   const [threshold, setThreshold] = useState(cam.threshold);
   const [sensitivity, setSensitivity] = useState(cam.sensitivity);
@@ -98,15 +106,34 @@ export function CameraPanel({ cam, onClose, onDisable, compact, zones, onZones }
           Split into zones — one strip per camera sensor
         </label>
       )}
-      {zoneHud.map((z, i) => (
-        <div className="wb-meter-row" key={i}>
-          <span className="wb-mod-label">zone {i + 1}</span>
-          <div className="wb-meter">
-            <div className="wb-meter-fill" style={{ width: `${Math.round(z * 100)}%` }} />
-          </div>
-          <span className="wb-motion-val">{z.toFixed(2)}</span>
+      {zoneHud.length > 0 && (
+        <div className="wb-settings-note" style={{ marginTop: 6 }}>
+          A strip plays while its bar is past the white line. If one triggers by itself, raise its threshold.
         </div>
-      ))}
+      )}
+      {zoneHud.map((z, i) => {
+        const gate = gates[i] ?? 0.3;
+        const open = z > gate;
+        return (
+          <div key={i} style={{ marginTop: 6 }}>
+            <div className="wb-meter-row">
+              <span className="wb-mod-label" style={{ color: open ? '#e9c46a' : undefined }} title={['left', 'centre', 'right'][i] ?? `strip ${i + 1}`}>
+                {zoneLabels?.[i] ?? `zone ${i + 1}`}
+              </span>
+              <div className="wb-meter" style={{ position: 'relative' }}>
+                <div className="wb-meter-fill" style={{ width: `${Math.round(z * 100)}%`, background: open ? '#e9c46a' : undefined }} />
+                <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${Math.round(gate * 100)}%`, width: 2, background: '#fff' }} title="trigger threshold" />
+              </div>
+              <span className="wb-motion-val">{z.toFixed(2)}</span>
+            </div>
+            <label className="wb-meter-row" style={{ fontSize: 11 }}>
+              <span className="wb-mod-label">threshold</span>
+              <input type="range" min={0} max={0.9} step={0.01} value={gate} onChange={(e) => setGate(i, Number(e.target.value))} style={{ flex: 1 }} aria-label={`trigger threshold, ${zoneLabels?.[i] ?? `zone ${i + 1}`}`} />
+              <span className="wb-motion-val">{Math.round(gate * 100)}%</span>
+            </label>
+          </div>
+        );
+      })}
 
       <div className="wb-settings-section">Detection</div>
       <div className="wb-knob-row">

@@ -16,3 +16,19 @@ describe('gateLevel (camera noise gate)', () => {
     expect(gateLevel(1, 5)).toBe(1); // gate clamped below 1
   });
 });
+
+describe('CameraSource per-strip thresholds', () => {
+  it('default to 30%, clamp, and survive a reload', async () => {
+    localStorage.clear();
+    const { CameraSource, ZONE_GATE_DEFAULT } = await import('../camera.ts');
+    const a = new CameraSource();
+    expect(a.zoneGate(1)).toBe(ZONE_GATE_DEFAULT);
+    a.setZoneGate(1, 0.55);
+    a.setZoneGate(2, 7); // clamped
+    a.setZoneGate(99, 0.1); // ignored
+    const b = new CameraSource();
+    expect(b.zoneGate(1)).toBe(0.55);
+    expect(b.zoneGate(2)).toBe(0.9);
+    expect(b.zoneGate(0)).toBe(ZONE_GATE_DEFAULT);
+  });
+});

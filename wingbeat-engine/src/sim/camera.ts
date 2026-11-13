@@ -14,13 +14,17 @@
 import { finite, loadJson, saveJson } from './persisted.ts';
 
 const CAL_KEY = 'wb.cam.v1';
-interface CamCal { contrast: number; threshold: number; sensitivity: number; releaseTime: number }
+interface CamCal { contrast: number; threshold: number; sensitivity: number; releaseTime: number; zoneGates: number[] }
+/** Default trigger threshold per strip (see gateLevel). */
+export const ZONE_GATE_DEFAULT = 0.3;
+const MAX_ZONES = 8;
 const loadCal = (): CamCal =>
   loadJson(CAL_KEY, (raw) => {
     const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
     return {
       contrast: finite(r.contrast, 1.8, 0.2, 8), threshold: finite(r.threshold, 24, 1, 255),
       sensitivity: finite(r.sensitivity, 8, 0.1, 100), releaseTime: finite(r.releaseTime, 0.4, 0.02, 5),
+      zoneGates: Array.from({ length: MAX_ZONES }, (_, i) => finite(Array.isArray(r.zoneGates) ? r.zoneGates[i] : undefined, ZONE_GATE_DEFAULT, 0, 0.9)),
     };
   });
 
@@ -78,6 +82,18 @@ export class CameraSource {
   /** envelope release in seconds */
   get releaseTime(): number { return this.cal.releaseTime; }
   set releaseTime(v: number) { this.cal.releaseTime = finite(v, 0.4, 0.02, 5); saveJson(CAL_KEY, this.cal); }
+
+  /** Trigger threshold of strip z (0..0.9): its motion at or below this is
+   *  silence. Per strip, because one part of a room is often noisier than
+   *  the rest (a window, a screen, a flickering lamp). */
+  zoneGate(z: number): number {
+    return this.cal.zoneGates[z] ?? ZONE_GATE_DEFAULT;
+  }
+  setZoneGate(z: number, v: number): void {
+    if (!Number.isInteger(z) || z < 0 || z >= MAX_ZONES) return;
+    this.cal.zoneGates[z] = finite(v, ZONE_GATE_DEFAULT, 0, 0.9);
+    saveJson(CAL_KEY, this.cal);
+  }
 
   private ema = 0;
   private emaX = 0.5;

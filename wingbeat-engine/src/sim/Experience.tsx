@@ -45,7 +45,6 @@ import { loadFeatherPresets, onFeatherPresetsChange, type FeatherPreset } from '
 import { useConductorSync, applyConductorConfig } from '../net/liveSync.ts';
 import { listCloudPresets, type CloudPreset } from '../net/cloud.ts';
 import { DEVICE_COUNT } from './inputs.ts';
-import { CameraSource, gateLevel } from './camera.ts';
 import { BUILTIN_PRESETS, getPreset } from './presets.ts';
 import { applySensorSamples } from '../net/liveSync.ts';
 import { LOOP_NATIVE_BPM } from '../engine/AudioEngine.ts';
@@ -62,7 +61,6 @@ const PULSE_KEY = 'wb.xpPulse.v1';
 const MASTER_KEY = 'wb.xpMaster.v1';
 const PERMS_KEY = 'wb.xpPerms.v1';
 const GUIDE_KEY = 'wb.xpGuide.dismissed.v1';
-const CAM_GATE_KEY = 'wb.xpCamGate.v1';
 const PERMS_LABEL: Record<PhonePerms, { name: string; hint: string }> = {
   play: { name: 'Play only', hint: 'phones move the feather, nothing else' },
   fx: { name: 'Play + FX', hint: 'phones also sweep the FX pad' },
@@ -299,19 +297,6 @@ export default function Experience() {
   };
   // Key / puff air per part (see the keyboard section below).
   const keyAir = useRef<number[]>(new Array(SLOT_PART.length).fill(0));
-  // Local webcam (built-in presets): the frame splits into one strip per
-  // driven part, left → right, so a feather moving in a strip plays that
-  // part. camParts = part indices in strip order; empty = camera off.
-  const cam = useMemo(() => new CameraSource(), []);
-  const camParts = useRef<number[]>([]);
-  const camAir = useRef<number[]>(new Array(SLOT_PART.length).fill(0));
-  // Trigger threshold: zone motion at or below it is silence, so a layer
-  // closes when the feather stops (webcam noise never reads a true 0).
-  const [camGate, setCamGate] = useState(() => loadJson(CAM_GATE_KEY, (raw) => finite(raw, 0.3, 0, 0.9)));
-  const camGateRef = useRef(camGate);
-  camGateRef.current = camGate;
-  useEffect(() => saveJson(CAM_GATE_KEY, camGate), [camGate]);
-
   const puff = (i: number, amount: number) => {
     const sens = rig.sensors[SLOT_PART[i]]?.sensitivity ?? 1;
     keyAir.current[i] = Math.min(1, keyAir.current[i] + amount * Math.min(1.5, sens));
@@ -518,12 +503,6 @@ export default function Experience() {
       const frames = dt * 60;
       // a pad whose phone vanished mid-hold goes stale here; the bus follows
       if (fxApplied.current.on) applyFx(arb.fxState(t));
-      camAir.current.fill(0);
-      if (cam.active && camParts.current.length) {
-        const zones = cam.read().zones;
-        // zoned: strip z → its part; unzoned: every part hears the whole frame
-        camParts.current.forEach((part, z) => (camAir.current[part] = gateLevel(zones[cam.zoneCount > 1 ? z : 0] ?? 0, camGateRef.current)));
-      }
       for (let i = 0; i < SLOT_PART.length; i++) {
 
         const id = SLOT_PART[i];
@@ -535,7 +514,7 @@ export default function Experience() {
         }
         // phone motion, key air and the test switch all drive the part — loudest wins
         const hands = (motion.current[i] = arb.level(i, t));
-        const v = Math.min(1, Math.max(hands * sens, camAir.current[i] * sens, keyAir.current[i], testHold.current[i] ? TEST_HOLD_LEVEL * sens : 0));
+        const v = Math.min(1, Math.max(hands * sens, keyAir.current[i], testHold.current[i] ? TEST_HOLD_LEVEL * sens : 0));
         // Presence goes to the engine on the EDGE only: every call runs a full
         // ingest + encounter publish, and the held wind (re-emitted by the
         // transport at 20 Hz) already keeps the node fresh.
@@ -589,35 +568,13 @@ export default function Experience() {
     setActivePreset(p.id);
   };
 
-  // ---- built-in presets (ship with the site: stems + camera zones) --------
+  // ---- built-in presets (ship with the site) -----------------------------
+  // On this page a built-in only brings its SOUND: the stems land on their
+  // parts, and the phones joined to those parts (QR in Control) and the keys
+  // play them, each layer on its own channel. The laptop camera is never
+  // touched here (the console's Camera panel is where camera play lives).
   const [builtin, setBuiltin] = useState('');
-  const [camState, setCamState] = useState<'off' | 'starting' | 'on' | 'blocked'>('off');
-  const [zoneLabels, setZoneLabels] = useState<string[]>([]);
-  const [camGain, setCamGain] = useState(() => cam.sensitivity);
-  useEffect(() => void (cam.sensitivity = camGain), [cam, camGain]);
-  // live preview (motion mask + strip dividers) and per-strip meters
-  const camCanvas = useRef<HTMLCanvasElement | null>(null);
-  const [zoneLv, setZoneLv] = useState<number[]>([]);
-  useEffect(() => {
-    if (camState !== 'on') return;
-    const c = camCanvas.current;
-    if (c) {
-      c.width = cam.size.w;
-      c.height = cam.size.h;
-      cam.attachPreview(c);
-    }
-    const id = setInterval(() => setZoneLv(cam.lastZones), 80);
-    return () => {
-      clearInterval(id);
-      cam.attachPreview(null);
-    };
-  }, [cam, camState]);
-  const stopCam = () => {
-    camParts.current = [];
-    cam.stop();
-    setCamState('off');
-  };
-  useEffect(() => () => cam.stop(), [cam]);
+  const [builtinLayers, setBuiltinLayers] = useState<Array<{ part: number; name: string }>>([]);
   const pickBuiltin = (name: string) => {
     const b = getPreset(name);
     if (!b) return;
@@ -627,23 +584,12 @@ export default function Experience() {
     if (b.loopBpm) chooseBpm(b.loopBpm);
     applySensorSamples(engine, audio, b.sensorSamples);
     if (!audio.ready) void startAudio(); // the tap that picked it unlocks sound
-    // the camera drives whichever parts the preset routes it to, in slot order
-    const r = b.routing;
-    const parts = r
-      ? Object.keys(r.sources)
-          .sort()
-          .filter((slot) => r.sources[slot] === 'camera')
-          .flatMap((slot) => r.parts[slot] ?? [])
-          .map((id) => SLOT_PART.indexOf(id))
-          .filter((i) => i >= 0)
-      : [];
-    if (!parts.length) return stopCam();
-    setZoneLabels(parts.map((i) => (b.sensorSamples?.[SLOT_PART[i]]?.name ?? SENSOR_CHANNELS[i]?.label ?? `Part ${i + 1}`).replace(/^.*·\s*/, '')));
-    camParts.current = parts;
-    camParts.current = parts;
-    cam.zoneCount = r?.camZones ? parts.length : 1;
-    setCamState('starting');
-    cam.start().then(() => setCamState('on')).catch(() => { camParts.current = []; setCamState('blocked'); });
+    setBuiltinLayers(
+      SLOT_PART.flatMap((id, part) => {
+        const ref = b.sensorSamples?.[id];
+        return ref ? [{ part, name: ref.name.replace(/^.*·\s*/, '') }] : [];
+      }),
+    );
   };
 
   // ---- feather looks saved in the studio (/feather2, same device) ---------
@@ -777,52 +723,23 @@ export default function Experience() {
           </div>
 
           <h3 className="xp-subhead">
-            Built in <em>songs played by moving a feather in front of the camera</em>
+            Built in <em>songs — one layer per phone channel</em>
           </h3>
           <div className="xp-presets">
             {BUILTIN_PRESETS.map((name) => (
-              <button key={name} className={`xp-preset ${builtin === name ? 'active' : ''}`} onClick={() => pickBuiltin(name)} title="drums & bass on the left, guitar in the middle, voice on the right">
-                <b>{name}</b>
-                <span>camera · left / centre / right</span>
+              <button key={name} className={`xp-preset ${builtin === name ? 'active' : ''}`} onClick={() => pickBuiltin(name)} title="each layer plays on its own phone channel">
+                <b>{name.replace(/\s*\(camera\)$/, '')}</b>
+                <span>phones · {builtinLayers.length && builtin === name ? builtinLayers.length : 3} layers</span>
               </button>
             ))}
           </div>
-          {(camState === 'starting' || camState === 'blocked') && (
-            <div className="xp-note">
-              {camState === 'starting' && 'starting the camera…'}
-              {camState === 'blocked' && 'camera blocked — allow camera access for this site and pick the preset again'}
-            </div>
-          )}
-          {camState === 'on' && (
-            <div className="xp-cam">
-              <canvas ref={camCanvas} className="xp-cam-view" aria-label="camera motion, split into strips" />
-              <div className="xp-cam-zones">
-                {zoneLabels.map((label, z) => {
-                  const raw = zoneLv[z] ?? 0;
-                  const open = raw > camGate;
-                  return (
-                    <div key={z} className={`xp-cam-zone ${open ? 'open' : ''}`}>
-                      <span>{['left', 'centre', 'right'][z] ?? `strip ${z + 1}`}</span>
-                      <b>{label}</b>
-                      <div className="xp-cam-meter">
-                        <i style={{ width: `${Math.round(raw * 100)}%` }} />
-                        <em style={{ left: `${Math.round(camGate * 100)}%` }} title="trigger threshold" />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              <label className="xp-cam-knob">
-                <span>Trigger threshold <i>{Math.round(camGate * 100)}%</i></span>
-                <input type="range" min={0} max={0.9} step={0.01} value={camGate} onChange={(e) => setCamGate(Number(e.target.value))} />
-              </label>
-              <label className="xp-cam-knob">
-                <span>Camera gain <i>{Math.round(camGain)}×</i></span>
-                <input type="range" min={1} max={30} step={1} value={camGain} onChange={(e) => setCamGain(Number(e.target.value))} />
-              </label>
+          {builtin && builtinLayers.length > 0 && (
+            <div className="xp-stems">
+              {builtinLayers.map(({ part, name }) => (
+                <BuiltinLayer key={part} name={name} channel={SENSOR_CHANNELS[part]?.label ?? `Part ${part + 1}`} keyName={(SENSOR_CHANNELS[part]?.key ?? '').toUpperCase()} level={play.levels} index={part} phones={devicePeers[part] ?? 0} />
+              ))}
               <div className="xp-note">
-                A layer plays while its strip's bar is past the line, and stops when it drops below. If a layer won't stop, raise the threshold. If it's hard to trigger, lower it or raise the gain.{' '}
-                <button className="xp-mini" onClick={stopCam}>stop camera</button>
+                Each layer plays only while its phone moves. Scan a channel's QR in <button className="xp-mini" onClick={() => toggle('control')}>Control</button>, or press its key.
               </div>
             </div>
           )}
@@ -1241,6 +1158,26 @@ function PlayChannelChip({ label, partKey, effect, part, on, index, levels, onPi
         <span /> test
       </button>
       <i ref={bar} />
+    </div>
+  );
+}
+
+// One layer of a built-in song: what it is, which phone channel / key plays
+// it, how many phones are on that channel, and a live level read ~12×/s from
+// the shared play levels (gold while it sounds).
+function BuiltinLayer({ name, channel, keyName, level, index, phones }: { name: string; channel: string; keyName: string; level: number[]; index: number; phones: number }) {
+  const [lv, setLv] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setLv(level[index] ?? 0), 80);
+    return () => clearInterval(id);
+  }, [level, index]);
+  return (
+    <div className={`xp-stem ${lv > 0.12 ? 'open' : ''}`}>
+      <b>{name}</b>
+      <span>
+        {channel} {keyName && <kbd>{keyName}</kbd>} · {phones ? `${phones} phone${phones > 1 ? 's' : ''}` : 'no phone yet'}
+      </span>
+      <div className="xp-stem-meter"><i style={{ width: `${Math.round(Math.min(1, lv) * 100)}%` }} /></div>
     </div>
   );
 }
